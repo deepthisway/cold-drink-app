@@ -1,3 +1,4 @@
+import { syncDatabaseWithCloud } from "@/src/db/sync/supabase";
 import { Stack } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
@@ -9,8 +10,12 @@ export default function RootLayout() {
   useEffect(() => {
     async function prepareDatabase() {
       try {
-        // Triggers database creation, tables verification, and pragma settings
+        console.log("Opening local SQLite instance...");
         await getDB();
+
+        // Pull the live products and shops straight from your Supabase dashboard insert
+        await syncDatabaseWithCloud();
+
         setDbInitialized(true);
       } catch (error) {
         console.error("Failed to initialize local SQLite layer:", error);
