@@ -75,7 +75,13 @@ export default function DriverHomeScreen() {
         >
           <Text style={styles.logoText}>🥤 ColdDrinkApp</Text>
         </TouchableOpacity>
-
+        {/* NEW PRINTER BUTTON */}
+        <TouchableOpacity
+          style={styles.printerBtn}
+          onPress={() => router.push("/(driver)/printer-settings")}
+        >
+          <Text style={styles.printerBtnText}>🖨️ Printer</Text>
+        </TouchableOpacity>
         {/* Subtle Flag Icon for End Day */}
         <TouchableOpacity
           style={styles.flagButton}
@@ -295,6 +301,8 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     fontSize: 16,
   },
+  printerBtn: { backgroundColor: "#E5E7EB", padding: 8, borderRadius: 8 },
+  printerBtnText: { fontSize: 14 },
 });
 
 // Overwrite stylistic typography variables tailored for text variants on history card colors

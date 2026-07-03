@@ -13,6 +13,8 @@ interface AppState {
   // Device Configuration
   deviceId: string;
   isAdmin: boolean;
+  printerAddress: string | null;
+  setPrinterAddress: (address: string) => void;
 
   // Active Invoice Session State
   currentShopId: string | null;
@@ -48,7 +50,8 @@ export const useAppStore = create<AppState>((set) => ({
   // Initialize device ID uniquely once per app session (simplifies multi-device tracing)
   deviceId: uuidv4(),
   isAdmin: false,
-
+  printerAddress: null,
+  setPrinterAddress: (address) => set({ printerAddress: address }),
   currentShopId: null,
   currentShopName: null,
   cart: {},

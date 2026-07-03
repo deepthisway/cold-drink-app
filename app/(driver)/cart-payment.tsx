@@ -53,6 +53,7 @@ export default function CartPaymentScreen() {
   };
 
   const handlePrintAndSave = async () => {
+    // 1. INSTANT BLOCK: If already submitting, reject any further taps immediately
     if (isSubmitting) return;
 
     if (cashAmount + paytmAmount > totalAmount) {
@@ -68,6 +69,7 @@ export default function CartPaymentScreen() {
       return;
     }
 
+    // 2. LOCK STATE: Set loading to true immediately before entering the DB logic
     setIsSubmitting(true);
 
     try {
@@ -76,7 +78,7 @@ export default function CartPaymentScreen() {
       const todayStr = new Date().toISOString().split("T")[0];
       const timestamp = new Date().toISOString();
 
-      // 1. Save main invoice locally
+      // 3. Database Writing Sequence
       await db.runAsync(
         `INSERT INTO invoice (
           id, display_number, shop_id, invoice_date, created_at, 
@@ -97,19 +99,16 @@ export default function CartPaymentScreen() {
         ],
       );
 
-      // 2. Loop and commit line items & stock ledger rows within the transaction framework
       for (const item of Object.values(cart)) {
         const itemId = uuidv4();
         const ledgerId = uuidv4();
         const itemTotal = item.boxes * item.price;
 
-        // Insert invoice line item
         await db.runAsync(
           "INSERT INTO invoice_item (id, invoice_id, sku_id, boxes, amount, synced) VALUES (?, ?, ?, ?, ?, 0)",
           [itemId, invoiceId, item.skuId, item.boxes, itemTotal],
         );
 
-        // Append negative entry to stock ledger to deduct boxes from van inventory
         await db.runAsync(
           `INSERT INTO stock_ledger (
             id, sku_id, entry_date, quantity, entry_type, invoice_id, created_at, device_id, synced
@@ -126,20 +125,25 @@ export default function CartPaymentScreen() {
         );
       }
 
-      // TODO: Call the native @finan-me/react-native-thermal-printer stack layout execution stream
+      // TODO: Call native @finan-me/react-native-thermal-printer logic here
+
+      // 4. CLEAN RESET & ROUTING: Clear active session memory and force redirect
+      resetInvoiceSession();
+      router.replace("/(driver)");
+
       Alert.alert(
         "Success",
-        "बिल सहेजा गया और प्रिंट हो रहा है! (Invoice Saved & Printing...)",
+        "बिल सहेजा गया! (Invoice Saved & Printing...)",
         [
           {
             text: "OK",
             onPress: () => {
-              resetInvoiceSession();
-              router.dismissAll(); // Return all the way out back to Home/Idle grid dashboard
+              // Push them clean back to Home and clear navigation stack history
               router.replace("/(driver)");
             },
           },
         ],
+        { cancelable: false }, // Prevent backing out via clicking outside the alert box
       );
     } catch (error) {
       console.error("Failed to commit invoice records:", error);
@@ -147,7 +151,7 @@ export default function CartPaymentScreen() {
         "Database Error",
         "Could not compile and save invoice. Please try again.",
       );
-    } finally {
+      // UNLOCK on error so they can try again if it actually failed to write
       setIsSubmitting(false);
     }
   };
