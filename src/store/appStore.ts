@@ -1,5 +1,3 @@
-import "react-native-get-random-values";
-import { v4 as uuidv4 } from "uuid";
 import { create } from "zustand";
 
 export interface CartItem {
@@ -12,6 +10,7 @@ export interface CartItem {
 interface AppState {
   // Device Configuration
   deviceId: string;
+  setDeviceId: (id: string) => void;
   isAdmin: boolean;
   printerAddress: string | null;
   setPrinterAddress: (address: string) => void;
@@ -19,7 +18,7 @@ interface AppState {
   // Active Invoice Session State
   currentShopId: string | null;
   currentShopName: string | null;
-  cart: Record<string, CartItem>; // Key: skuId
+  cart: Record<string, CartItem>;
 
   // Sync Status Flag
   isSyncing: boolean;
@@ -30,7 +29,6 @@ interface AppState {
   selectShop: (id: string, name: string) => void;
   clearShopSelection: () => void;
 
-  // Cart Actions
   updateCartQuantity: (
     skuId: string,
     name: string,
@@ -41,14 +39,15 @@ interface AppState {
   clearCart: () => void;
   resetInvoiceSession: () => void;
 
-  // Sync Actions
   setSyncingStatus: (status: boolean) => void;
   setLastSyncedTime: (time: string) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
-  // Initialize device ID uniquely once per app session (simplifies multi-device tracing)
-  deviceId: uuidv4(),
+  // Placeholder until _layout.tsx hydrates the real persisted ID on app start
+  deviceId: "unassigned",
+  setDeviceId: (id) => set({ deviceId: id }),
+
   isAdmin: false,
   printerAddress: null,
   setPrinterAddress: (address) => set({ printerAddress: address }),
@@ -73,7 +72,6 @@ export const useAppStore = create<AppState>((set) => ({
 
       const updatedCart = { ...state.cart };
 
-      // Enforce lower bound (0) and upper bound (available stock in van)
       if (newBoxes <= 0) {
         delete updatedCart[skuId];
       } else if (newBoxes <= remainingStock) {

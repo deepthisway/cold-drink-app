@@ -42,16 +42,15 @@ export default function BillingGridScreen() {
         // Aggregates matching load rows minus sales across the cumulative daily ledger logs
         const rows = await db.getAllAsync<SKURow>(
           `
-          SELECT 
+        SELECT 
             s.id, s.name, s.brand, s.size, s.price, s.image_path,
             COALESCE(SUM(l.quantity), 0) as remaining_stock
-          FROM sku s
-          LEFT JOIN stock_ledger l ON s.id = l.sku_id AND l.entry_date = ?
-          WHERE s.active = 1
-          GROUP BY s.id
-          ORDER BY s.brand ASC, s.name ASC
+        FROM sku s
+        LEFT JOIN stock_ledger l ON s.id = l.sku_id
+        WHERE s.active = 1
+        GROUP BY s.id
+        ORDER BY s.brand ASC, s.name ASC
         `,
-          [todayStr],
         );
 
         setSkus(rows);

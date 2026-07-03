@@ -1,8 +1,6 @@
+import { ThermalPrinter } from "@finan-me/react-native-thermal-printer";
 import { Alert } from "react-native";
-import {
-    BluetoothEscposPrinter,
-    BluetoothManager,
-} from "react-native-thermal-receipt-printer-image-qr";
+import { ensureBluetoothPermissions } from "./bluetoothPermissions";
 
 export interface PrintItem {
   name: string;
@@ -22,150 +20,126 @@ export interface PrintInvoiceData {
   items: PrintItem[];
 }
 
-export const printReceipt = async (invoice: PrintInvoiceData) => {
+// Address must be in "bt:AA:BB:CC:DD:EE:FF" format for this library
+function toBtAddress(macAddress: string): string {
+  return macAddress.startsWith("bt:") ? macAddress : `bt:${macAddress}`;
+}
+
+export const printReceipt = async (
+  invoice: PrintInvoiceData,
+  savedPrinterAddress: string | null,
+): Promise<boolean> => {
   try {
-    // 1. Check if Bluetooth is enabled
-    const isEnabled = await BluetoothManager.checkBluetoothEnabled();
-    if (!isEnabled) {
+    const hasPermission = await ensureBluetoothPermissions();
+    if (!hasPermission) {
       Alert.alert(
-        "Bluetooth Off",
-        "Please turn on Bluetooth to print the receipt.",
+        "Permission Needed",
+        "Bluetooth permission is required to print. Please allow it and try again.",
       );
       return false;
     }
 
-    // 2. Connect to the paired printer (Finds the first connected POS printer)
-    const devices = await BluetoothManager.enableBluetooth();
-    const pairedDevices = devices.reduce((acc: any[], deviceGroup: any) => {
-      // Library returns grouped devices, we extract the paired ones
-      if (deviceGroup && deviceGroup.paired) {
-        return acc.concat(deviceGroup.paired || []);
+    let targetAddress = savedPrinterAddress;
+
+    // If no saved printer, scan and grab the first paired device
+    if (!targetAddress) {
+      const { paired } = await ThermalPrinter.scanDevices();
+      if (!paired || paired.length === 0) {
+        Alert.alert(
+          "No Printer",
+          "No paired Bluetooth printer found. Please set up your printer first.",
+        );
+        return false;
       }
-      return acc;
-    }, []);
-
-    if (pairedDevices.length === 0) {
-      Alert.alert(
-        "No Printer",
-        "No paired Bluetooth printer found. Please pair it in Android settings first.",
-      );
-      return false;
+      targetAddress = paired[0].address;
     }
 
-    // Connect to the first paired device (assuming it's your MT580P)
-    const printerAddress = pairedDevices[0].address;
-    await BluetoothManager.connect(printerAddress);
+    const documentBody: any[] = [
+      {
+        type: "text",
+        content: "SHARMA COLD DRINKS",
+        style: { align: "center", bold: true, size: "double" },
+      },
+      {
+        type: "text",
+        content: "Wholesale Distributor",
+        style: { align: "center" },
+      },
+      { type: "line" },
+      { type: "text", content: `Shop: ${invoice.shopName}` },
+      { type: "text", content: `Date: ${invoice.date}` },
+      { type: "line" },
+      {
+        type: "table",
+        headers: ["Item", "Qty", "Amount"],
+        rows: invoice.items.map((item) => [
+          item.name.substring(0, 14),
+          `${item.boxes}`,
+          `${item.amount}`,
+        ]),
+        columnWidths: [16, 6, 10],
+        alignments: ["left", "center", "right"],
+      },
+      { type: "line" },
+      {
+        type: "text",
+        content: `Total Boxes: ${invoice.totalBoxes}`,
+        style: { align: "right" },
+      },
+      {
+        type: "text",
+        content: `GRAND TOTAL: Rs ${invoice.totalAmount}`,
+        style: { align: "right", bold: true, size: "double_width" },
+      },
+      { type: "line" },
+      { type: "text", content: `Cash Paid: Rs ${invoice.cashPaid}` },
+    ];
 
-    // 3. Start Formatting the 58mm Receipt
-    await BluetoothEscposPrinter.printerAlign(
-      BluetoothEscposPrinter.ALIGN.CENTER,
-    );
-    await BluetoothEscposPrinter.printText(
-      "--------------------------------\n\r",
-      {},
-    );
-    await BluetoothEscposPrinter.printText("SHARMA COLD DRINKS\n\r", {
-      fonttype: 1,
-      widthtimes: 1,
-      heigthtimes: 1,
-    });
-    await BluetoothEscposPrinter.printText("Wholesale Distributor\n\r", {});
-    await BluetoothEscposPrinter.printText(
-      "--------------------------------\n\r",
-      {},
-    );
-
-    // Shop & Date Info
-    await BluetoothEscposPrinter.printerAlign(
-      BluetoothEscposPrinter.ALIGN.LEFT,
-    );
-    await BluetoothEscposPrinter.printText(`Shop: ${invoice.shopName}\n\r`, {});
-    await BluetoothEscposPrinter.printText(`Date: ${invoice.date}\n\r`, {});
-    await BluetoothEscposPrinter.printText(
-      "--------------------------------\n\r",
-      {},
-    );
-
-    // Items Header
-    await BluetoothEscposPrinter.printText(
-      "Item             Qty      Amount\n\r",
-      {},
-    );
-    await BluetoothEscposPrinter.printText(
-      "--------------------------------\n\r",
-      {},
-    );
-
-    // Items Loop
-    for (const item of invoice.items) {
-      // Simple text padding to align columns on 32-character 58mm paper
-      let name = item.name.substring(0, 14).padEnd(15, " ");
-      let qty = `${item.boxes}`.padStart(3, " ");
-      let amt = `${item.amount}`.padStart(9, " ");
-      await BluetoothEscposPrinter.printText(`${name} ${qty} ${amt}\n\r`, {});
-    }
-
-    await BluetoothEscposPrinter.printText(
-      "--------------------------------\n\r",
-      {},
-    );
-
-    // Totals
-    await BluetoothEscposPrinter.printerAlign(
-      BluetoothEscposPrinter.ALIGN.RIGHT,
-    );
-    await BluetoothEscposPrinter.printText(
-      `Total Boxes: ${invoice.totalBoxes}\n\r`,
-      {},
-    );
-    await BluetoothEscposPrinter.printText(
-      `GRAND TOTAL: Rs ${invoice.totalAmount}\n\r`,
-      { widthtimes: 1 },
-    );
-    await BluetoothEscposPrinter.printText(
-      "--------------------------------\n\r",
-      {},
-    );
-
-    // Payment Breakdown
-    await BluetoothEscposPrinter.printerAlign(
-      BluetoothEscposPrinter.ALIGN.LEFT,
-    );
-    await BluetoothEscposPrinter.printText(
-      `Cash Paid: Rs ${invoice.cashPaid}\n\r`,
-      {},
-    );
     if (invoice.paytmPaid > 0) {
-      await BluetoothEscposPrinter.printText(
-        `Paytm/Online: Rs ${invoice.paytmPaid}\n\r`,
-        {},
-      );
+      documentBody.push({
+        type: "text",
+        content: `Paytm/Online: Rs ${invoice.paytmPaid}`,
+      });
     }
     if (invoice.udhaar > 0) {
-      await BluetoothEscposPrinter.printText(
-        `UDHAAR DUE: Rs ${invoice.udhaar}\n\r`,
-        { widthtimes: 1 },
-      );
+      documentBody.push({
+        type: "text",
+        content: `UDHAAR DUE: Rs ${invoice.udhaar}`,
+        style: { bold: true },
+      });
     }
 
-    // Footer
-    await BluetoothEscposPrinter.printerAlign(
-      BluetoothEscposPrinter.ALIGN.CENTER,
+    documentBody.push(
+      { type: "line" },
+      {
+        type: "text",
+        content: "Thank You! Please Visit Again.",
+        style: { align: "center" },
+      },
+      { type: "feed", lines: 3 },
+      { type: "cut" },
     );
-    await BluetoothEscposPrinter.printText(
-      "--------------------------------\n\r",
-      {},
-    );
-    await BluetoothEscposPrinter.printText(
-      "Thank You! Please Visit Again.\n\r",
-      {},
-    );
-    await BluetoothEscposPrinter.printText("\n\r\n\r\n\r", {}); // Feed paper out
 
-    return true;
-  } catch (err) {
+    const job = {
+      printers: [
+        {
+          address: toBtAddress(targetAddress),
+          options: {
+            paperWidthMm: 58,
+            marginMm: 1,
+          },
+        },
+      ],
+      documents: [documentBody],
+    };
+
+    const result = await ThermalPrinter.printReceipt(job);
+    return result?.success ?? false;
+  } catch (err: any) {
     console.error("Printer execution failed:", err);
-    Alert.alert("Printer Error", "Failed to communicate with the printer.");
+    const message = err?.message || "Failed to communicate with the printer.";
+    const suggestion = err?.suggestion ? `\n\n${err.suggestion}` : "";
+    Alert.alert("Printer Error", `${message}${suggestion}`);
     return false;
   }
 };

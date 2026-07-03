@@ -32,16 +32,15 @@ export default function RemainingStockReportScreen() {
         // This query sums up all loads, subtracts all sales, and adds back cancellations for today
         const rows = await db.getAllAsync<StockReportItem>(
           `
-          SELECT 
-            s.id, s.name, s.brand, s.size,
-            COALESCE(SUM(l.quantity), 0) as expected_stock
-          FROM sku s
-          LEFT JOIN stock_ledger l ON s.id = l.sku_id AND l.entry_date = ?
-          WHERE s.active = 1
-          GROUP BY s.id
-          ORDER BY s.brand ASC, s.name ASC
-        `,
-          [todayStr],
+            SELECT 
+                s.id, s.name, s.brand, s.size,
+                COALESCE(SUM(l.quantity), 0) as expected_stock
+            FROM sku s
+            LEFT JOIN stock_ledger l ON s.id = l.sku_id
+            WHERE s.active = 1
+            GROUP BY s.id
+            ORDER BY s.brand ASC, s.name ASC
+            `,
         );
 
         setReportData(rows);

@@ -23,6 +23,7 @@ export default function CartPaymentScreen() {
     currentShopName,
     cart,
     deviceId,
+    printerAddress,
     resetInvoiceSession,
   } = useAppStore();
 
@@ -53,7 +54,6 @@ export default function CartPaymentScreen() {
   };
 
   const handlePrintAndSave = async () => {
-    // 1. INSTANT BLOCK: If already submitting, reject any further taps immediately
     if (isSubmitting) return;
 
     if (cashAmount + paytmAmount > totalAmount) {
@@ -69,7 +69,6 @@ export default function CartPaymentScreen() {
       return;
     }
 
-    // 2. LOCK STATE: Set loading to true immediately before entering the DB logic
     setIsSubmitting(true);
 
     try {
@@ -78,13 +77,33 @@ export default function CartPaymentScreen() {
       const todayStr = new Date().toISOString().split("T")[0];
       const timestamp = new Date().toISOString();
 
-      // 3. Database Writing Sequence
+      // 1. Actually attempt to print FIRST, so we know whether it succeeded
+      const printSuccess = await printReceipt(
+        {
+          shopName: currentShopName || "Unknown Shop",
+          date: todayStr,
+          totalBoxes,
+          totalAmount,
+          cashPaid: cashAmount,
+          paytmPaid: paytmAmount,
+          udhaar: udhaarAmount,
+          items: Object.values(cart).map((item) => ({
+            name: item.name,
+            boxes: item.boxes,
+            price: item.price,
+            amount: item.boxes * item.price,
+          })),
+        },
+        printerAddress,
+      );
+
+      // 2. Save invoice with the REAL printed status, not a hardcoded 1
       await db.runAsync(
         `INSERT INTO invoice (
-          id, display_number, shop_id, invoice_date, created_at, 
-          total_amount, total_boxes, cash_amount, paytm_amount, udhaar_amount, 
-          status, printed, device_id, synced
-        ) VALUES (?, null, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, ?, 0)`,
+        id, display_number, shop_id, invoice_date, created_at, 
+        total_amount, total_boxes, cash_amount, paytm_amount, udhaar_amount, 
+        status, printed, device_id, synced
+      ) VALUES (?, null, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, 0)`,
         [
           invoiceId,
           currentShopId,
@@ -95,6 +114,7 @@ export default function CartPaymentScreen() {
           cashAmount,
           paytmAmount,
           udhaarAmount,
+          printSuccess ? 1 : 0,
           deviceId,
         ],
       );
@@ -111,8 +131,8 @@ export default function CartPaymentScreen() {
 
         await db.runAsync(
           `INSERT INTO stock_ledger (
-            id, sku_id, entry_date, quantity, entry_type, invoice_id, created_at, device_id, synced
-          ) VALUES (?, ?, ?, ?, 'sale', ?, ?, ?, 0)`,
+          id, sku_id, entry_date, quantity, entry_type, invoice_id, created_at, device_id, synced
+        ) VALUES (?, ?, ?, ?, 'sale', ?, ?, ?, 0)`,
           [
             ledgerId,
             item.skuId,
@@ -125,33 +145,30 @@ export default function CartPaymentScreen() {
         );
       }
 
-      // TODO: Call native @finan-me/react-native-thermal-printer logic here
-
-      // 4. CLEAN RESET & ROUTING: Clear active session memory and force redirect
       resetInvoiceSession();
-      router.replace("/(driver)");
 
-      Alert.alert(
-        "Success",
-        "बिल सहेजा गया! (Invoice Saved & Printing...)",
-        [
-          {
-            text: "OK",
-            onPress: () => {
-              // Push them clean back to Home and clear navigation stack history
-              router.replace("/(driver)");
-            },
-          },
-        ],
-        { cancelable: false }, // Prevent backing out via clicking outside the alert box
-      );
+      if (!printSuccess) {
+        // Invoice is saved either way (offline-safe), but let them know printing failed
+        Alert.alert(
+          "Saved, but Printing Failed",
+          "बिल सहेजा गया लेकिन प्रिंट नहीं हुआ। आप इसे बाद में 'Old Invoices' से दोबारा प्रिंट कर सकते हैं। (Invoice saved but did not print. You can reprint it later from Old Invoices.)",
+          [{ text: "OK", onPress: () => router.replace("/(driver)") }],
+          { cancelable: false },
+        );
+      } else {
+        Alert.alert(
+          "Success",
+          "बिल सहेजा गया और प्रिंट हो गया! (Invoice Saved & Printed!)",
+          [{ text: "OK", onPress: () => router.replace("/(driver)") }],
+          { cancelable: false },
+        );
+      }
     } catch (error) {
       console.error("Failed to commit invoice records:", error);
       Alert.alert(
         "Database Error",
         "Could not compile and save invoice. Please try again.",
       );
-      // UNLOCK on error so they can try again if it actually failed to write
       setIsSubmitting(false);
     }
   };

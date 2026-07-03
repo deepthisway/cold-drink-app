@@ -3,29 +3,34 @@ import { Stack } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { getDB } from "../src/db/local/sqlite";
+import { useAppStore } from "../src/store/appStore";
+import { getOrCreateDeviceId } from "../src/utils/deviceId";
 
 export default function RootLayout() {
   const [dbInitialized, setDbInitialized] = useState(false);
+  const setDeviceId = useAppStore((state) => state.setDeviceId);
 
   useEffect(() => {
-    async function prepareDatabase() {
+    async function prepareApp() {
       try {
+        console.log("Hydrating persisted device ID...");
+        const id = await getOrCreateDeviceId();
+        setDeviceId(id);
+
         console.log("Opening local SQLite instance...");
         await getDB();
 
-        // Pull the live products and shops straight from your Supabase dashboard insert
         await syncDatabaseWithCloud();
 
         setDbInitialized(true);
       } catch (error) {
-        console.error("Failed to initialize local SQLite layer:", error);
+        console.error("Failed to initialize app:", error);
       }
     }
 
-    prepareDatabase();
+    prepareApp();
   }, []);
 
-  // Show a clean loading state while SQLite initializes tables on the first cold launch
   if (!dbInitialized) {
     return (
       <View style={styles.loadingContainer}>
@@ -36,10 +41,7 @@ export default function RootLayout() {
 
   return (
     <Stack screenOptions={{ headerShown: false }}>
-      {/* Driver screens routing group */}
       <Stack.Screen name="(driver)" options={{ headerShown: false }} />
-
-      {/* Admin screens routing group */}
       <Stack.Screen name="(admin)" options={{ headerShown: false }} />
     </Stack>
   );

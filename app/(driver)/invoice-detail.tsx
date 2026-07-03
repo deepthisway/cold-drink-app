@@ -1,3 +1,4 @@
+import { useAppStore } from "@/src/store/appStore";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
@@ -41,6 +42,7 @@ export default function InvoiceDetailScreen() {
   const [invoice, setInvoice] = useState<InvoiceDetail | null>(null);
   const [items, setItems] = useState<InvoiceItemDetail[]>([]);
   const [isActionLoading, setIsActionLoading] = useState(false);
+  const printerAddress = useAppStore((state) => state.printerAddress);
 
   useEffect(() => {
     async function loadInvoiceDetails() {
@@ -82,12 +84,32 @@ export default function InvoiceDetailScreen() {
     loadInvoiceDetails();
   }, [id]);
 
-  const handleReprint = () => {
-    // TODO: Trigger native @finan-me/react-native-thermal-printer image generation stream
-    Alert.alert(
-      "Reprinting",
-      "Sending duplicate receipt layout to MT580P thermal printer...",
+  const handleReprint = async () => {
+    if (!invoice) return;
+
+    const printSuccess = await printReceipt(
+      {
+        shopName: invoice.shop_name,
+        date: invoice.invoice_date,
+        totalBoxes: invoice.total_boxes,
+        totalAmount: invoice.total_amount,
+        cashPaid: invoice.cash_amount,
+        paytmPaid: invoice.paytm_amount,
+        udhaar: invoice.udhaar_amount,
+        items: items.map((item) => ({
+          name: item.sku_name,
+          boxes: item.boxes,
+          price: 0, // not needed for reprint layout
+          amount: item.amount,
+        })),
+      },
+      printerAddress,
     );
+
+    if (printSuccess) {
+      Alert.alert("Success", "Receipt reprinted successfully.");
+    }
+    // printReceipt already shows its own error alert on failure, no need to duplicate
   };
 
   const handleCancelInvoice = () => {

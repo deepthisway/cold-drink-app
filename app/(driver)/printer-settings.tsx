@@ -1,3 +1,5 @@
+import { ensureBluetoothPermissions } from "@/src/utils/bluetoothPermissions";
+import { ThermalPrinter } from "@finan-me/react-native-thermal-printer";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
@@ -9,10 +11,6 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
-import {
-    BluetoothEscposPrinter,
-    BluetoothManager,
-} from "react-native-thermal-receipt-printer-image-qr";
 import { useAppStore } from "../../src/store/appStore";
 
 interface PairedDevice {
@@ -35,28 +33,23 @@ export default function PrinterSettingsScreen() {
   const scanDevices = async () => {
     setLoading(true);
     try {
-      const isEnabled = await BluetoothManager.checkBluetoothEnabled();
-      if (!isEnabled) {
+      const hasPermission = await ensureBluetoothPermissions();
+      if (!hasPermission) {
         Alert.alert(
-          "Bluetooth is Off",
-          "Please turn on Bluetooth in your phone settings first.",
+          "Permission Needed",
+          "Please allow Bluetooth permissions to scan for printers.",
         );
         setLoading(false);
         return;
       }
 
-      const scanned = await BluetoothManager.enableBluetooth();
-      let pairedList: PairedDevice[] = [];
-
-      // The library returns an array of device groups. We want the paired ones.
-      if (scanned && scanned.length > 0) {
-        scanned.forEach((group: any) => {
-          if (group.paired) {
-            pairedList = [...pairedList, ...group.paired];
-          }
-        });
-      }
-      setDevices(pairedList);
+      const { paired } = await ThermalPrinter.scanDevices();
+      setDevices(
+        (paired || []).map((d: any) => ({
+          name: d.name || "Unknown Device",
+          address: d.address,
+        })),
+      );
     } catch (error) {
       console.error("Bluetooth Scan Error:", error);
       Alert.alert("Scan Failed", "Could not scan for Bluetooth devices.");
@@ -68,35 +61,38 @@ export default function PrinterSettingsScreen() {
   const connectAndTestPrinter = async (device: PairedDevice) => {
     setConnectingTo(device.address);
     try {
-      // Connect to the specific MAC address
-      await BluetoothManager.connect(device.address);
+      const address = device.address.startsWith("bt:")
+        ? device.address
+        : `bt:${device.address}`;
 
-      // Save it globally so the billing screen knows which one to use
-      setPrinterAddress(device.address);
+      const job = {
+        printers: [{ address, options: { paperWidthMm: 58, marginMm: 1 } }],
+        documents: [
+          [
+            { type: "text", content: "--------------------------------" },
+            {
+              type: "text",
+              content: "PRINTER CONNECTED SUCCESSFULLY!",
+              style: { align: "center", bold: true },
+            },
+            { type: "text", content: "--------------------------------" },
+            { type: "feed", lines: 2 },
+          ],
+        ],
+      };
 
-      // Print a small test strip
-      await BluetoothEscposPrinter.printerAlign(
-        BluetoothEscposPrinter.ALIGN.CENTER,
-      );
-      await BluetoothEscposPrinter.printText(
-        "--------------------------------\n\r",
-        {},
-      );
-      await BluetoothEscposPrinter.printText(
-        "PRINTER CONNECTED SUCCESSFULLY!\n\r",
-        {},
-      );
-      await BluetoothEscposPrinter.printText(
-        "--------------------------------\n\r",
-        {},
-      );
-      await BluetoothEscposPrinter.printText("\n\r\n\r", {});
+      const result = await ThermalPrinter.printReceipt(job);
 
-      Alert.alert(
-        "Success!",
-        `Connected to ${device.name} and saved as default printer.`,
-      );
-    } catch (error) {
+      if (result?.success) {
+        setPrinterAddress(device.address);
+        Alert.alert(
+          "Success!",
+          `Connected to ${device.name} and saved as default printer.`,
+        );
+      } else {
+        throw new Error("Print job did not succeed");
+      }
+    } catch (error: any) {
       console.error("Printer Connection Error:", error);
       Alert.alert(
         "Connection Failed",
