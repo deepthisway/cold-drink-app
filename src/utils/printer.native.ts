@@ -322,3 +322,77 @@ export const printEndDayReports = async (
     return false;
   }
 };
+
+// ... (ऊपर का पुराना कोड वैसे ही रहने दें) ...
+
+export const printItemWiseReport = async (
+  data: EndDayReportData,
+  savedPrinterAddress: string | null,
+): Promise<boolean> => {
+  try {
+    const hasPermission = await ensureBluetoothPermissions();
+    if (!hasPermission) {
+      Alert.alert(
+        "Permission Needed",
+        "Bluetooth permission is required to print.",
+      );
+      return false;
+    }
+
+    let targetAddress = savedPrinterAddress;
+    if (!targetAddress) {
+      const { paired } = await ThermalPrinter.scanDevices();
+      if (!paired || paired.length === 0) {
+        Alert.alert("No Printer", "No paired Bluetooth printer found.");
+        return false;
+      }
+      targetAddress = paired[0].address;
+    }
+
+    // ---- Document: सिर्फ आइटम और बॉक्स रिपोर्ट ----
+    const itemDoc: any[] = [
+      {
+        type: "text",
+        content: "DAILY ITEM REPORT",
+        style: { align: "center", bold: true, size: "double" },
+      },
+      { type: "text", content: data.date, style: { align: "center" } },
+      { type: "line" },
+      {
+        type: "table",
+        headers: ["Item", "Box"],
+        rows: data.skuTotals.map((s) => [s.name, `${s.boxes}`]),
+        columnWidths: [26, 10],
+        alignments: ["left", "right"],
+      },
+      { type: "line" },
+      {
+        type: "text",
+        content: `TOTAL BOXES: ${data.totalBoxes}`,
+        style: { bold: true },
+      },
+      { type: "feed", lines: 3 },
+      { type: "cut" },
+    ];
+
+    const job = {
+      printers: [
+        {
+          address: toBtAddress(targetAddress),
+          options: { paperWidthMm: 58, marginMm: 1 },
+        },
+      ],
+      documents: [itemDoc], // सिर्फ आइटम वाला डॉक्यूमेंट भेज रहे हैं
+    };
+
+    const result = await ThermalPrinter.printReceipt(job);
+    return result?.success ?? false;
+  } catch (err: any) {
+    console.error("Item print failed:", err);
+    Alert.alert(
+      "Printer Error",
+      err?.message || "Failed to print item report.",
+    );
+    return false;
+  }
+};

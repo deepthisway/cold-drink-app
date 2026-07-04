@@ -1,3 +1,4 @@
+import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
@@ -22,6 +23,14 @@ export default function DriverHomeScreen() {
   const [boxesSold, setBoxesSold] = useState(0);
   const [endDayVisible, setEndDayVisible] = useState(false);
   const [printingEndDay, setPrintingEndDay] = useState(false);
+
+  // Date Formatting (आज की तारीख)
+  const today = new Date();
+  const formattedDate = today.toLocaleDateString("en-IN", {
+    weekday: "long",
+    day: "numeric",
+    month: "short",
+  });
 
   useEffect(() => {
     fetchTodayStats();
@@ -61,7 +70,6 @@ export default function DriverHomeScreen() {
       const db = await getDB();
       const todayStr = new Date().toISOString().split("T")[0];
 
-      // 1. Invoice-wise data (active + cancelled dono, shop naam ke saath)
       const invoiceRows = await db.getAllAsync<{
         shop_name: string;
         total_boxes: number;
@@ -69,10 +77,8 @@ export default function DriverHomeScreen() {
         status: string;
       }>(
         `SELECT s.name as shop_name, i.total_boxes, i.total_amount, i.status
-         FROM invoice i
-         JOIN shop s ON s.id = i.shop_id
-         WHERE i.invoice_date = ?
-         ORDER BY i.created_at ASC`,
+         FROM invoice i JOIN shop s ON s.id = i.shop_id
+         WHERE i.invoice_date = ? ORDER BY i.created_at ASC`,
         [todayStr],
       );
 
@@ -93,27 +99,21 @@ export default function DriverHomeScreen() {
         0,
       );
 
-      // 2. SKU-wise totals (sirf active invoices ka)
       const skuRows = await db.getAllAsync<{ name: string; boxes: number }>(
         `SELECT sk.name as name, SUM(ii.boxes) as boxes
-         FROM invoice_item ii
-         JOIN invoice i ON i.id = ii.invoice_id
-         JOIN sku sk ON sk.id = ii.sku_id
+         FROM invoice_item ii JOIN invoice i ON i.id = ii.invoice_id JOIN sku sk ON sk.id = ii.sku_id
          WHERE i.invoice_date = ? AND i.status = 'active'
-         GROUP BY sk.id
-         ORDER BY sk.name ASC`,
+         GROUP BY sk.id ORDER BY sk.name ASC`,
         [todayStr],
       );
 
-      // 3. Payments — udhaar aur paytm wale shop-wise (sirf active invoices)
       const paymentRows = await db.getAllAsync<{
         shop_name: string;
         udhaar_amount: number;
         paytm_amount: number;
       }>(
         `SELECT s.name as shop_name, i.udhaar_amount, i.paytm_amount
-         FROM invoice i
-         JOIN shop s ON s.id = i.shop_id
+         FROM invoice i JOIN shop s ON s.id = i.shop_id
          WHERE i.invoice_date = ? AND i.status = 'active'`,
         [todayStr],
       );
@@ -121,7 +121,6 @@ export default function DriverHomeScreen() {
       const udhaarList = paymentRows
         .filter((r) => r.udhaar_amount > 0)
         .map((r) => ({ shopName: r.shop_name, amount: r.udhaar_amount }));
-
       const paytmList = paymentRows
         .filter((r) => r.paytm_amount > 0)
         .map((r) => ({ shopName: r.shop_name, amount: r.paytm_amount }));
@@ -131,8 +130,8 @@ export default function DriverHomeScreen() {
 
       if (invoices.length === 0) {
         Alert.alert(
-          "No Bills Today",
-          "Aaj koi bill nahi bana, print karne ke liye kuch nahi hai.",
+          "कोई बिल नहीं (No Bills)",
+          "आज कोई बिल नहीं बना है, रिपोर्ट निकालने के लिए कुछ नहीं है।",
         );
         setPrintingEndDay(false);
         return;
@@ -154,108 +153,126 @@ export default function DriverHomeScreen() {
       );
 
       if (success) {
-        Alert.alert("Success", "Teeno reports print ho gaye!");
+        Alert.alert("सफलता (Success)", "आज की रिपोर्ट प्रिंट हो गई है।");
       }
-      // agar fail hua, printEndDayReports khud apna error alert dikha chuka hai
     } catch (error) {
       console.error("End day report generation failed:", error);
       Alert.alert(
-        "Error",
-        "Reports banane mein dikkat aayi. Dobara try karein.",
+        "एरर (Error)",
+        "रिपोर्ट प्रिंट करने में समस्या आई। कृपया फिर से कोशिश करें।",
       );
     } finally {
       setPrintingEndDay(false);
     }
   };
 
-  const handleLogoLongPress = () => {
-    router.push("/(admin)/pin-entry");
-  };
-
   return (
     <View style={styles.container}>
+      {/* Header Area */}
       <View style={styles.header}>
+        {/* Left: Empty Spacer for Balance */}
+        <View style={styles.iconPlaceholder} />
+
+        {/* Center: Brand (Long press for Admin) */}
         <TouchableOpacity
-          delayLongPress={800}
-          onLongPress={handleLogoLongPress}
           activeOpacity={0.8}
+          delayLongPress={1000}
+          onLongPress={() => router.push("/(admin)/pin-entry")}
+          style={styles.brandCenter}
         >
-          <Text style={styles.logoText}>🥤 ColdDrinkApp</Text>
+          <Text style={styles.brandTitle}>Deep Drinks</Text>
+          <Text style={styles.dateText}>{formattedDate}</Text>
         </TouchableOpacity>
+
+        {/* Right: End Day Flag (Red) */}
         <TouchableOpacity
-          style={styles.printerBtn}
-          onPress={() => router.push("/(driver)/printer-settings")}
-        >
-          <Text style={styles.printerBtnText}>🖨️ Printer</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.flagButton}
+          style={styles.endDayBtn}
           onPress={() => setEndDayVisible(true)}
         >
-          <Text style={styles.flagIcon}>🏁</Text>
+          <Feather name="power" size={22} color="#FFFFFF" />
         </TouchableOpacity>
       </View>
 
-      <View style={styles.menuContainer}>
+      {/* Subtle Stats Pill */}
+      <View style={styles.statsContainer}>
+        <View style={styles.statPill}>
+          <Text style={styles.statPillText}>
+            आज का काम: <Text style={styles.statPillBold}>{billCount} बिल</Text>{" "}
+            | <Text style={styles.statPillBold}>{boxesSold} पेटी</Text>
+          </Text>
+        </View>
+      </View>
+
+      {/* Centered Large Action Buttons */}
+      <View style={styles.centerActionContainer}>
         <TouchableOpacity
-          style={[styles.card, styles.newBillCard]}
+          style={[styles.bigCard, styles.primaryCard]}
+          activeOpacity={0.9}
           onPress={handleNewBill}
         >
-          <Text style={styles.cardIcon}>⚡</Text>
-          <Text style={styles.cardTitle}>नया बिल बनाएँ</Text>
-          <Text style={styles.cardSubTitle}>Generate New Invoice</Text>
+          <Feather
+            name="plus-circle"
+            size={48}
+            color="#FFFFFF"
+            style={styles.cardIcon}
+          />
+          <Text style={styles.primaryCardText}>नया बिल</Text>
+          <Text style={styles.primaryCardSubText}>(New Bill)</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.card, styles.historyCard]}
+          style={[styles.bigCard, styles.secondaryCard]}
+          activeOpacity={0.7}
           onPress={() => router.push("/(driver)/old-invoices")}
         >
-          <Text style={styles.cardIcon}>📄</Text>
-          <Text style={styles.cardTitle}>पुराने बिल देखें</Text>
-          <Text style={styles.cardSubTitle}>Old Invoices</Text>
+          <Feather
+            name="file-text"
+            size={42}
+            color="#111827"
+            style={styles.cardIcon}
+          />
+          <Text style={styles.secondaryCardText}>पुराने बिल</Text>
+          <Text style={styles.secondaryCardSubText}>(Old Invoices)</Text>
         </TouchableOpacity>
       </View>
 
-      <View style={styles.statusStrip}>
-        <Text style={styles.statusText}>
-          Today: <Text style={styles.boldText}>{billCount} bills</Text> ·{" "}
-          <Text style={styles.boldText}>{boxesSold} boxes sold</Text>
-        </Text>
-      </View>
-
+      {/* End Day Modal */}
       <Modal visible={endDayVisible} transparent={true} animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalEmoji}>⚠️</Text>
-            <Text style={styles.modalTitle}>क्या आज का काम खत्म हो गया?</Text>
+            <View style={styles.modalIconCircle}>
+              <Feather name="printer" size={28} color="#DC2626" />
+            </View>
+            <Text style={styles.modalTitle}>काम खत्म करें (End Day)</Text>
             <Text style={styles.modalMessage}>
-              Make sure all current bills are completely printed before hitting
-              end day. This will print the invoice summary, item totals, and
-              payment reports back-to-back.
+              क्या आज का काम पूरा हो गया है? यह बटन दबाने से आज की पूरी रिपोर्ट
+              और हिसाब प्रिंट हो जाएगा। प्रिंटर चालू रखें।
             </Text>
-
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={[styles.btn, styles.btnCancel]}
                 onPress={() => setEndDayVisible(false)}
               >
-                <Text style={styles.btnCancelText}>Cancel</Text>
+                <Text style={styles.btnCancelText}>रद्द करें (Cancel)</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.btn, styles.btnConfirm]}
                 onPress={handleEndDayConfirm}
               >
-                <Text style={styles.btnConfirmText}>End Day</Text>
+                <Text style={styles.btnConfirmText}>रिपोर्ट निकालें</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
+      {/* Printing Loading Overlay */}
       {printingEndDay && (
         <View style={styles.printingOverlay}>
-          <ActivityIndicator size="large" color="#FFFFFF" />
-          <Text style={styles.printingText}>Reports print ho rahe hain...</Text>
+          <View style={styles.printingBox}>
+            <ActivityIndicator size="large" color="#111827" />
+            <Text style={styles.printingText}>रिपोर्ट प्रिंट हो रही है...</Text>
+          </View>
         </View>
       )}
     </View>
@@ -263,71 +280,124 @@ export default function DriverHomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F3F4F6", paddingTop: 50 },
+  container: {
+    flex: 1,
+    backgroundColor: "#F3F4F6",
+    paddingTop: 60,
+  },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 24,
-    marginBottom: 30,
+    paddingHorizontal: 20,
+    marginBottom: 20,
   },
-  logoText: { fontSize: 22, fontWeight: "700", color: "#1F2937" },
-  flagButton: {
-    width: 44,
-    height: 44,
-    backgroundColor: "#E5E7EB",
-    borderRadius: 22,
+  iconPlaceholder: {
+    width: 48,
+    height: 48,
+  },
+  endDayBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: "#DC2626", // Red background for End Day
     justifyContent: "center",
     alignItems: "center",
+    shadowColor: "#DC2626",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  flagIcon: { fontSize: 20 },
-  menuContainer: {
+  brandCenter: {
+    alignItems: "center",
+    flex: 1,
+  },
+  brandTitle: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: "#111827",
+    textAlign: "center",
+  },
+  dateText: {
+    fontSize: 14,
+    color: "#6B7280",
+    fontWeight: "600",
+    marginTop: 4,
+  },
+  statsContainer: {
+    alignItems: "center",
+    marginBottom: 30,
+  },
+  statPill: {
+    backgroundColor: "#FFFFFF",
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  statPillText: {
+    fontSize: 15,
+    color: "#4B5563",
+  },
+  statPillBold: {
+    fontWeight: "700",
+    color: "#111827",
+  },
+  centerActionContainer: {
     flex: 1,
     paddingHorizontal: 24,
     justifyContent: "center",
+    paddingBottom: 60, // Shift slightly up for optical centering
     gap: 24,
   },
-  card: {
-    flex: 0.35,
-    borderRadius: 20,
+  bigCard: {
+    height: 160, // Fixed height to make them chunky and easy to tap
+    borderRadius: 24,
     justifyContent: "center",
     alignItems: "center",
-    padding: 24,
-    elevation: 4,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
   },
-  newBillCard: { backgroundColor: "#007AFF" },
-  historyCard: {
+  primaryCard: {
+    backgroundColor: "#111827", // Black/Dark slate
+  },
+  secondaryCard: {
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: "#E5E7EB",
   },
-  cardIcon: { fontSize: 40, marginBottom: 12 },
-  cardTitle: {
+  cardIcon: {
+    marginBottom: 12,
+  },
+  primaryCardText: {
     fontSize: 26,
     fontWeight: "bold",
-    textAlign: "center",
     color: "#FFFFFF",
   },
-  historyCardText: { color: "#1F2937" },
-  cardSubTitle: { fontSize: 14, marginTop: 4, opacity: 0.8, color: "#FFFFFF" },
-  statusStrip: {
-    backgroundColor: "#FFFFFF",
-    paddingVertical: 16,
-    borderTopWidth: 1,
-    borderColor: "#E5E7EB",
-    alignItems: "center",
+  primaryCardSubText: {
+    fontSize: 14,
+    color: "#9CA3AF",
+    marginTop: 4,
   },
-  statusText: { fontSize: 16, color: "#4B5563" },
-  boldText: { fontWeight: "700", color: "#1F2937" },
+  secondaryCardText: {
+    fontSize: 26,
+    fontWeight: "bold",
+    color: "#111827",
+  },
+  secondaryCardSubText: {
+    fontSize: 14,
+    color: "#6B7280",
+    marginTop: 4,
+  },
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
     justifyContent: "center",
-    alignItems: "center",
     padding: 24,
   },
   modalContent: {
@@ -335,42 +405,77 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     padding: 24,
     alignItems: "center",
-    width: "100%",
-    elevation: 5,
   },
-  modalEmoji: { fontSize: 44, marginBottom: 12 },
+  modalIconCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: "#FEE2E2", // Light red bg for icon
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 20,
+  },
   modalTitle: {
     fontSize: 22,
     fontWeight: "bold",
-    color: "#1F2937",
-    textAlign: "center",
-    marginBottom: 8,
+    color: "#111827",
+    marginBottom: 12,
   },
   modalMessage: {
-    fontSize: 14,
+    fontSize: 16,
     color: "#4B5563",
     textAlign: "center",
-    lineHeight: 20,
-    marginBottom: 24,
+    lineHeight: 24,
+    marginBottom: 28,
   },
-  modalActions: { flexDirection: "row", gap: 12, width: "100%" },
-  btn: { flex: 1, paddingVertical: 16, borderRadius: 12, alignItems: "center" },
-  btnCancel: { backgroundColor: "#F3F4F6" },
-  btnCancelText: { color: "#4B5563", fontWeight: "600", fontSize: 16 },
-  btnConfirm: { backgroundColor: "#EF4444" },
-  btnConfirmText: { color: "#FFFFFF", fontWeight: "600", fontSize: 16 },
-  printerBtn: { backgroundColor: "#E5E7EB", padding: 8, borderRadius: 8 },
-  printerBtnText: { fontSize: 14 },
+  modalActions: {
+    flexDirection: "row",
+    gap: 12,
+    width: "100%",
+  },
+  btn: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: "center",
+  },
+  btnCancel: {
+    backgroundColor: "#F3F4F6",
+  },
+  btnCancelText: {
+    color: "#4B5563",
+    fontWeight: "700",
+    fontSize: 16,
+  },
+  btnConfirm: {
+    backgroundColor: "#DC2626", // Red confirm button
+  },
+  btnConfirmText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 16,
+  },
   printingOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: "rgba(0,0,0,0.4)",
     justifyContent: "center",
     alignItems: "center",
   },
+  printingBox: {
+    backgroundColor: "#FFFFFF",
+    padding: 30,
+    borderRadius: 20,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 5,
+  },
   printingText: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    marginTop: 12,
-    fontWeight: "600",
+    color: "#111827",
+    fontSize: 18,
+    marginTop: 20,
+    fontWeight: "700",
   },
 });

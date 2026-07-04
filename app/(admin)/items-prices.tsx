@@ -1,121 +1,114 @@
+import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    StyleSheet,
-    Switch,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { getDB } from "../../src/db/local/sqlite";
 
-interface SKU {
+interface ItemPriceRow {
   id: string;
   name: string;
-  brand: string | null;
   size: string | null;
   price: number;
-  active: number;
+  active: number; // 1 = visible, 0 = hidden
 }
 
 export default function ItemsPricesScreen() {
   const router = useRouter();
+  const [items, setItems] = useState<ItemPriceRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [skus, setSkus] = useState<SKU[]>([]);
-
-  // Modal State
-  const [editingSku, setEditingSku] = useState<SKU | null>(null);
-  const [newPrice, setNewPrice] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
+  // Temporary local state dictionaries tracking modifications
+  const [priceChanges, setPriceChanges] = useState<Record<string, string>>({});
+  const [statusChanges, setStatusChanges] = useState<Record<string, number>>(
+    {},
+  );
+
   useEffect(() => {
-    loadSkus();
+    loadMasterItems();
   }, []);
 
-  const loadSkus = async () => {
+  async function loadMasterItems() {
     try {
       const db = await getDB();
-      const rows = await db.getAllAsync<SKU>(
-        "SELECT * FROM sku ORDER BY active DESC, brand ASC, name ASC",
+      const rows = await db.getAllAsync<ItemPriceRow>(
+        "SELECT id, name, size, price, active FROM sku ORDER BY name ASC",
       );
-      setSkus(rows);
+      setItems(rows);
     } catch (error) {
-      console.error("Failed to load SKUs:", error);
-      Alert.alert("Error", "Could not load items from database.");
+      console.error("Failed to query master product item rows:", error);
     } finally {
       setLoading(false);
     }
+  }
+
+  const handlePriceTextChange = (id: string, text: string) => {
+    const cleanText = text.replace(/[^0-9]/g, "");
+    setPriceChanges((prev) => ({ ...prev, [id]: cleanText }));
   };
 
-  const toggleActiveStatus = async (id: string, currentStatus: number) => {
-    const newStatus = currentStatus === 1 ? 0 : 1;
-
-    // Optimistically update UI
-    setSkus((prev) =>
-      prev.map((sku) => (sku.id === id ? { ...sku, active: newStatus } : sku)),
-    );
-
-    try {
-      const db = await getDB();
-      // Mark synced = 0 so any future catalog upload engine pushes it to cloud
-      await db.runAsync("UPDATE sku SET active = ?, synced = 0 WHERE id = ?", [
-        newStatus,
-        id,
-      ]);
-    } catch (error) {
-      console.error("Failed to toggle SKU active status:", error);
-      // Revert UI on failure
-      setSkus((prev) =>
-        prev.map((sku) =>
-          sku.id === id ? { ...sku, active: currentStatus } : sku,
-        ),
-      );
-      Alert.alert("Database Error", "Could not update item status.");
-    }
+  const toggleItemActiveStatus = (id: string, currentStatus: number) => {
+    // If a modification already exists locally, invert it; otherwise, calculate next step state
+    const targetBase =
+      statusChanges[id] !== undefined ? statusChanges[id] : currentStatus;
+    const nextStatus = targetBase === 1 ? 0 : 1;
+    setStatusChanges((prev) => ({ ...prev, [id]: nextStatus }));
   };
 
-  const openPriceModal = (sku: SKU) => {
-    setEditingSku(sku);
-    setNewPrice(sku.price.toString());
-  };
+  const handleSaveChanges = async () => {
+    const priceUpdates = Object.entries(priceChanges);
+    const statusUpdates = Object.entries(statusChanges);
 
-  const handleSavePrice = async () => {
-    if (!editingSku) return;
-
-    const parsedPrice = parseInt(newPrice, 10);
-    if (isNaN(parsedPrice) || parsedPrice <= 0) {
-      Alert.alert(
-        "Invalid Price",
-        "Please enter a valid number greater than 0.",
-      );
+    if (priceUpdates.length === 0 && statusUpdates.length === 0) {
+      Alert.alert("सूचना", "कोई बदलाव नहीं किया गया है।");
       return;
     }
 
     setIsSaving(true);
     try {
       const db = await getDB();
-      await db.runAsync("UPDATE sku SET price = ?, synced = 0 WHERE id = ?", [
-        parsedPrice,
-        editingSku.id,
-      ]);
 
-      // Update local state
-      setSkus((prev) =>
-        prev.map((sku) =>
-          sku.id === editingSku.id ? { ...sku, price: parsedPrice } : sku,
-        ),
+      // 1. Process batch price corrections
+      for (const [id, priceStr] of priceUpdates) {
+        if (priceStr.trim() !== "") {
+          const newPrice = parseInt(priceStr);
+          await db.runAsync(
+            "UPDATE sku SET price = ?, synced = 0 WHERE id = ?",
+            [newPrice, id],
+          );
+        }
+      }
+
+      // 2. Process batch visibility switch status loops
+      for (const [id, activeInt] of statusUpdates) {
+        await db.runAsync(
+          "UPDATE sku SET active = ?, synced = 0 WHERE id = ?",
+          [activeInt, id],
+        );
+      }
+
+      Alert.alert(
+        "सफलता",
+        "सभी आइटमों के दाम और स्टेटस सफलतापूर्वक अपडेट हो गए हैं!",
+        [{ text: "ठीक है", onPress: () => router.back() }],
       );
-      setEditingSku(null);
     } catch (error) {
-      console.error("Failed to update price:", error);
-      Alert.alert("Database Error", "Could not save the new price.");
+      console.error(
+        "Database updates failed inside master catalog transactions:",
+        error,
+      );
+      Alert.alert("एरर", "डेटाबेस में बदलाव सुरक्षित करने में समस्या आई।");
     } finally {
       setIsSaving(false);
     }
@@ -124,123 +117,143 @@ export default function ItemsPricesScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#8B5CF6" />
+        <ActivityIndicator size="large" color="#111827" />
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
-      {/* Header */}
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      style={styles.container}
+    >
+      {/* Top Header Row Panel */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <Text style={styles.backBtnText}>⬅️ Back</Text>
+          <Feather name="arrow-left" size={24} color="#111827" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Items & Prices</Text>
+        <Text style={styles.headerTitle}>सामान और रेट मैनेजमेंट</Text>
+        <View style={{ width: 44 }} />
       </View>
 
+      {/* Main Items Listing FlatList */}
       <FlatList
-        data={skus}
+        data={items}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContainer}
-        renderItem={({ item }) => (
-          <View
-            style={[
-              styles.itemCard,
-              item.active === 0 && styles.itemCardInactive,
-            ]}
-          >
-            <View style={styles.itemMain}>
-              <Text
-                style={[
-                  styles.itemName,
-                  item.active === 0 && styles.textInactive,
-                ]}
-              >
-                {item.name}
-              </Text>
-              <Text style={styles.itemSpecs}>
-                {item.brand} • {item.size}
-              </Text>
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        renderItem={({ item }) => {
+          // Resolve if dynamic changes are live in memory
+          const livePriceStr =
+            priceChanges[item.id] !== undefined
+              ? priceChanges[item.id]
+              : item.price.toString();
+          const liveActiveStatus =
+            statusChanges[item.id] !== undefined
+              ? statusChanges[item.id]
+              : item.active;
+          const isItemActive = liveActiveStatus === 1;
 
-              <View style={styles.priceRow}>
-                <Text style={styles.priceLabel}>Price: </Text>
-                <Text style={styles.priceValue}>₹{item.price}</Text>
-                <TouchableOpacity
-                  style={styles.editPriceBtn}
-                  onPress={() => openPriceModal(item)}
+          return (
+            <View
+              style={[
+                styles.itemConfigCard,
+                !isItemActive && styles.itemConfigCardDisabled,
+              ]}
+            >
+              {/* Left Identity Column block */}
+              <View style={styles.productMetaInfoBlock}>
+                <Text
+                  style={[
+                    styles.productNameText,
+                    !isItemActive && styles.textMuted,
+                  ]}
+                  numberOfLines={1}
                 >
-                  <Text style={styles.editPriceBtnText}>✏️ Edit</Text>
+                  {item.name}
+                </Text>
+                <Text style={styles.productSizeText}>
+                  साइज: {item.size || "Standard"}
+                </Text>
+
+                {/* Visual Status Activation Chip */}
+                <TouchableOpacity
+                  style={[
+                    styles.statusToggleBadge,
+                    isItemActive ? styles.badgeActive : styles.badgeInactive,
+                  ]}
+                  activeOpacity={0.7}
+                  onPress={() => toggleItemActiveStatus(item.id, item.active)}
+                >
+                  <View
+                    style={[
+                      styles.dotMarker,
+                      isItemActive ? styles.dotActive : styles.dotInactive,
+                    ]}
+                  />
+                  <Text
+                    style={[
+                      styles.statusToggleText,
+                      isItemActive ? styles.textActive : styles.textInactive,
+                    ]}
+                  >
+                    {isItemActive ? "चालू (Active)" : "बंद (Hidden)"}
+                  </Text>
                 </TouchableOpacity>
               </View>
-            </View>
 
-            <View style={styles.toggleContainer}>
-              <Text style={styles.toggleLabel}>
-                {item.active === 1 ? "Active" : "Hidden"}
-              </Text>
-              <Switch
-                value={item.active === 1}
-                onValueChange={() => toggleActiveStatus(item.id, item.active)}
-                trackColor={{ false: "#D1D5DB", true: "#C4B5FD" }}
-                thumbColor={item.active === 1 ? "#8B5CF6" : "#9CA3AF"}
-              />
+              {/* Right Pricing Inputs Segment Block */}
+              <View style={styles.pricingInputColumn}>
+                <Text style={styles.pricingFieldLabel}>
+                  रेट (Wholesale Rate)
+                </Text>
+                <View style={styles.inputPrefixWrap}>
+                  <Text style={styles.currencySymbolText}>₹</Text>
+                  <TextInput
+                    style={styles.rateInputField}
+                    value={livePriceStr}
+                    placeholder="0"
+                    placeholderTextColor="#9CA3AF"
+                    keyboardType="number-pad"
+                    maxLength={5}
+                    editable={isItemActive} // Block editing rates on inactive items to preserve clarity
+                    onChangeText={(text) =>
+                      handlePriceTextChange(item.id, text)
+                    }
+                  />
+                </View>
+              </View>
             </View>
-          </View>
-        )}
+          );
+        }}
       />
 
-      {/* Edit Price Modal Overlay */}
-      <Modal
-        visible={!!editingSku}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setEditingSku(null)}
-      >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          style={styles.modalOverlay}
+      {/* FIXED FOOTER CONTROLS ROW PANEL CONTAINER */}
+      <View style={styles.stickyFooterContainer}>
+        <TouchableOpacity
+          style={[
+            styles.executionSubmitBtn,
+            isSaving && styles.btnDisabledState,
+          ]}
+          disabled={isSaving}
+          activeOpacity={0.9}
+          onPress={handleSaveChanges}
         >
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Edit Price</Text>
-            <Text style={styles.modalSubtitle}>{editingSku?.name}</Text>
-
-            <View style={styles.inputWrapper}>
-              <Text style={styles.currencySymbol}>₹</Text>
-              <TextInput
-                style={styles.priceInput}
-                keyboardType="number-pad"
-                value={newPrice}
-                onChangeText={setNewPrice}
-                autoFocus={true}
-                maxLength={5}
-              />
-            </View>
-
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={styles.modalCancelBtn}
-                onPress={() => setEditingSku(null)}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.modalSaveBtn,
-                  isSaving && styles.modalSaveBtnDisabled,
-                ]}
-                onPress={handleSavePrice}
-                disabled={isSaving}
-              >
-                <Text style={styles.modalSaveText}>
-                  {isSaving ? "Saving..." : "Save Price"}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-    </View>
+          <Feather
+            name="save"
+            size={20}
+            color="#FFFFFF"
+            style={{ marginRight: 8 }}
+          />
+          <Text style={styles.executionSubmitBtnText}>
+            {isSaving
+              ? "बदलाव सुरक्षित हो रहे हैं..."
+              : "रेट और स्टेटस सुरक्षित करें"}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -248,188 +261,177 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F3F4F6",
+    paddingTop: 44,
   },
   header: {
     flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 50,
-    paddingBottom: 16,
     backgroundColor: "#FFFFFF",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     borderBottomWidth: 1,
     borderColor: "#E5E7EB",
-    gap: 12,
   },
   backBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    backgroundColor: "#F3F4F6",
-    borderRadius: 8,
-  },
-  backBtnText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#4B5563",
+    width: 44,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
   },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#1F2937",
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#111827",
   },
   center: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
+    backgroundColor: "#F3F4F6",
   },
   listContainer: {
-    padding: 16,
-    paddingBottom: 40,
+    padding: 14,
+    paddingBottom: 130, // Clearance margin runtime prevents items disappearing behind footer bar maps
   },
-  itemCard: {
-    flexDirection: "row",
+  itemConfigCard: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 12,
+    borderRadius: 22,
     padding: 16,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     marginBottom: 12,
     borderWidth: 1,
     borderColor: "#E5E7EB",
-    alignItems: "center",
-    justifyContent: "space-between",
     elevation: 1,
   },
-  itemCardInactive: {
+  itemConfigCardDisabled: {
     backgroundColor: "#F9FAFB",
-    opacity: 0.7,
+    borderColor: "#E5E7EB",
   },
-  itemMain: {
-    flex: 0.75,
+  productMetaInfoBlock: {
+    flex: 0.58,
+    justifyContent: "center",
   },
-  itemName: {
+  productNameText: {
     fontSize: 18,
-    fontWeight: "bold",
-    color: "#1F2937",
+    fontWeight: "800",
+    color: "#111827",
   },
-  textInactive: {
+  productSizeText: {
+    fontSize: 14,
     color: "#6B7280",
+    fontWeight: "600",
+    marginTop: 2,
+  },
+  textMuted: {
+    color: "#9CA3AF",
     textDecorationLine: "line-through",
   },
-  itemSpecs: {
-    fontSize: 13,
-    color: "#6B7280",
-    marginTop: 2,
-    marginBottom: 8,
-  },
-  priceRow: {
+  statusToggleBadge: {
     flexDirection: "row",
     alignItems: "center",
-  },
-  priceLabel: {
-    fontSize: 14,
-    color: "#4B5563",
-  },
-  priceValue: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#8B5CF6",
-  },
-  editPriceBtn: {
-    marginLeft: 12,
-    backgroundColor: "#F3F4F6",
-    paddingHorizontal: 10,
+    alignSelf: "flex-start",
     paddingVertical: 4,
-    borderRadius: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    marginTop: 8,
+    borderWidth: 1,
   },
-  editPriceBtnText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#4B5563",
+  badgeActive: {
+    backgroundColor: "#ECFDF5",
+    borderColor: "#A7F3D0",
   },
-  toggleContainer: {
-    flex: 0.25,
+  badgeInactive: {
+    backgroundColor: "#F3F4F6",
+    borderColor: "#E5E7EB",
+  },
+  dotMarker: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 6,
+  },
+  dotActive: {
+    backgroundColor: "#10B981",
+  },
+  dotInactive: {
+    backgroundColor: "#9CA3AF",
+  },
+  statusToggleText: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  textActive: {
+    color: "#065F46",
+  },
+  textInactive: {
+    color: "#374151",
+  },
+  pricingInputColumn: {
+    flex: 0.42,
     alignItems: "flex-end",
   },
-  toggleLabel: {
+  pricingFieldLabel: {
     fontSize: 12,
     color: "#6B7280",
-    fontWeight: "600",
-    marginBottom: 4,
+    fontWeight: "750",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+    marginBottom: 6,
   },
-  modalOverlay: {
+  inputPrefixWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F3F4F6",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    height: 48,
+    paddingHorizontal: 12,
+    width: "100%",
+  },
+  currencySymbolText: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#4B5563",
+    marginRight: 4,
+  },
+  rateInputField: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    fontSize: 18,
+    fontWeight: "900",
+    color: "#111827",
+    padding: 0,
+  },
+  stickyFooterContainer: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "#FFFFFF",
+    borderTopWidth: 1,
+    borderColor: "#E5E7EB",
+    paddingTop: 14,
+    paddingHorizontal: 20,
+    paddingBottom: 38, // Clearance depth avoids soft keys overlay collisions completely
+    elevation: 16,
+  },
+  executionSubmitBtn: {
+    backgroundColor: "#111827",
+    height: 56,
+    borderRadius: 16,
     justifyContent: "center",
     alignItems: "center",
-    padding: 20,
-  },
-  modalContent: {
-    backgroundColor: "#FFFFFF",
-    width: "100%",
-    maxWidth: 340,
-    borderRadius: 16,
-    padding: 24,
-    elevation: 5,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: "bold",
-    color: "#1F2937",
-  },
-  modalSubtitle: {
-    fontSize: 15,
-    color: "#6B7280",
-    marginTop: 4,
-    marginBottom: 20,
-  },
-  inputWrapper: {
     flexDirection: "row",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#D1D5DB",
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    backgroundColor: "#F9FAFB",
-    marginBottom: 24,
   },
-  currencySymbol: {
-    fontSize: 24,
-    color: "#6B7280",
-    marginRight: 8,
-    fontWeight: "500",
+  btnDisabledState: {
+    backgroundColor: "#9CA3AF",
   },
-  priceInput: {
-    flex: 1,
-    height: 60,
-    fontSize: 28,
-    fontWeight: "bold",
-    color: "#1F2937",
-  },
-  modalActions: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: 12,
-  },
-  modalCancelBtn: {
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-  },
-  modalCancelText: {
-    fontSize: 16,
-    color: "#6B7280",
-    fontWeight: "600",
-  },
-  modalSaveBtn: {
-    backgroundColor: "#8B5CF6",
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-  },
-  modalSaveBtnDisabled: {
-    backgroundColor: "#C4B5FD",
-  },
-  modalSaveText: {
-    fontSize: 16,
+  executionSubmitBtnText: {
     color: "#FFFFFF",
-    fontWeight: "bold",
+    fontSize: 17,
+    fontWeight: "800",
   },
 });

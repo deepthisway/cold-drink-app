@@ -1,5 +1,4 @@
-import { useAppStore } from "@/src/store/appStore";
-import { printReceipt } from "@/src/utils/printer";
+import { Feather } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
@@ -11,332 +10,273 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import "react-native-get-random-values";
-import { v4 as uuidv4 } from "uuid";
 import { getDB } from "../../src/db/local/sqlite";
+import { useAppStore } from "../../src/store/appStore";
+import { printReceipt } from "../../src/utils/printer";
 
-interface InvoiceDetail {
+interface InvoiceMetadata {
   id: string;
+  shop_name: string;
   invoice_date: string;
   total_amount: number;
   total_boxes: number;
   cash_amount: number;
   paytm_amount: number;
   udhaar_amount: number;
-  status: "active" | "cancelled";
-  shop_name: string;
-  shop_phone: string | null;
+  status: string;
 }
 
-interface InvoiceItemDetail {
-  id: string;
-  sku_name: string;
+interface InvoiceItemBreakdown {
+  name: string;
   boxes: number;
+  price: number;
   amount: number;
 }
 
 export default function InvoiceDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-
-  const [loading, setLoading] = useState(true);
-  const [invoice, setInvoice] = useState<InvoiceDetail | null>(null);
-  const [items, setItems] = useState<InvoiceItemDetail[]>([]);
-  const [isActionLoading, setIsActionLoading] = useState(false);
   const printerAddress = useAppStore((state) => state.printerAddress);
 
+  const [metadata, setMetadata] = useState<InvoiceMetadata | null>(null);
+  const [items, setItems] = useState<InvoiceItemBreakdown[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [reprinting, setReprinting] = useState(false);
+
   useEffect(() => {
-    async function loadInvoiceDetails() {
-      if (!id) return;
-      try {
-        const db = await getDB();
-
-        // 1. Fetch main invoice joined with shop information
-        const invoiceData = await db.getFirstAsync<InvoiceDetail>(
-          `
-          SELECT i.*, s.name as shop_name, s.phone as shop_phone
-          FROM invoice i
-          JOIN shop s ON i.shop_id = s.id
-          WHERE i.id = ?
-        `,
-          [id],
-        );
-
-        // 2. Fetch specific items mapped inside this invoice
-        const itemsData = await db.getAllAsync<InvoiceItemDetail>(
-          `
-          SELECT ii.id, ii.boxes, ii.amount, sk.name as sku_name
-          FROM invoice_item ii
-          JOIN sku sk ON ii.sku_id = sk.id
-          WHERE ii.invoice_id = ?
-        `,
-          [id],
-        );
-
-        setInvoice(invoiceData || null);
-        setItems(itemsData);
-      } catch (error) {
-        console.error("Failed to load deep invoice record details:", error);
-      } finally {
-        setLoading(false);
-      }
+    if (id) {
+      loadFullInvoiceDetails(id);
     }
-
-    loadInvoiceDetails();
   }, [id]);
 
-  const handleReprint = async () => {
-    if (!invoice) return;
-
-    const printSuccess = await printReceipt(
-      {
-        shopName: invoice.shop_name,
-        date: invoice.invoice_date,
-        totalBoxes: invoice.total_boxes,
-        totalAmount: invoice.total_amount,
-        cashPaid: invoice.cash_amount,
-        paytmPaid: invoice.paytm_amount,
-        udhaar: invoice.udhaar_amount,
-        items: items.map((item) => ({
-          name: item.sku_name,
-          boxes: item.boxes,
-          price: 0, // not needed for reprint layout
-          amount: item.amount,
-        })),
-      },
-      printerAddress,
-    );
-
-    if (printSuccess) {
-      Alert.alert("Success", "Receipt reprinted successfully.");
-    }
-    // printReceipt already shows its own error alert on failure, no need to duplicate
-  };
-
-  const handleCancelInvoice = () => {
-    Alert.alert(
-      "क्या आप निश्चित हैं?",
-      "Do you want to cancel this bill? This will reverse the van stock and mark this invoice as cancelled permanently.",
-      [
-        { text: "No", style: "cancel" },
-        {
-          text: "Yes, Cancel Bill",
-          style: "destructive",
-          onPress: executeCancellation,
-        },
-      ],
-    );
-  };
-
-  const executeCancellation = async () => {
-    if (!invoice || isActionLoading) return;
-    setIsActionLoading(true);
-
+  async function loadFullInvoiceDetails(invoiceId: string) {
     try {
       const db = await getDB();
-      const todayStr = new Date().toISOString().split("T")[0];
-      const timestamp = new Date().toISOString();
 
-      // 1. Flip invoice state status to cancelled
-      await db.runAsync(
-        "UPDATE invoice SET status = 'cancelled', synced = 0 WHERE id = ?",
-        [invoice.id],
+      // 1. Load context metadata details
+      const metaRows = await db.getAllAsync<InvoiceMetadata>(
+        `SELECT i.id, s.name as shop_name, i.invoice_date, i.total_amount, 
+                i.total_boxes, i.cash_amount, i.paytm_amount, i.udhaar_amount, i.status
+         FROM invoice i
+         JOIN shop s ON s.id = i.shop_id
+         WHERE i.id = ?`,
+        [invoiceId],
       );
 
-      // 2. Fetch line items to construct counter-balancing positive ledger rows
-      const lineItems = await db.getAllAsync<{ sku_id: string; boxes: number }>(
-        "SELECT sku_id, boxes FROM invoice_item WHERE invoice_id = ?",
-        [invoice.id],
-      );
-
-      // Append positive entries back to the ledger to restore stock levels in the van
-      for (const item of lineItems) {
-        const reversalLedgerId = uuidv4();
-        await db.runAsync(
-          `INSERT INTO stock_ledger (
-            id, sku_id, entry_date, quantity, entry_type, invoice_id, created_at, synced
-          ) VALUES (?, ?, ?, ?, 'cancel_reversal', ?, ?, 0)`,
-          [
-            reversalLedgerId,
-            item.sku_id,
-            todayStr,
-            item.boxes,
-            invoice.id,
-            timestamp,
-          ],
-        );
+      if (metaRows.length > 0) {
+        setMetadata(metaRows[0]);
       }
 
-      setInvoice({ ...invoice, status: "cancelled" });
-      Alert.alert(
-        "Success",
-        "बिल निरस्त कर दिया गया है! (Invoice has been successfully cancelled!)",
-        [
-          {
-            text: "OK",
-            onPress: () => router.replace("/(driver)/old-invoices"),
-          },
-        ],
+      // 2. Load accurate product item rows lines
+      const itemRows = await db.getAllAsync<InvoiceItemBreakdown>(
+        `SELECT sk.name, ii.boxes, sk.price, ii.amount 
+         FROM invoice_item ii
+         JOIN sku sk ON sk.id = ii.sku_id
+         WHERE ii.invoice_id = ?`,
+        [invoiceId],
       );
+      setItems(itemRows);
     } catch (error) {
-      console.error(
-        "Failed to execute invoice cancellation routing logs:",
-        error,
-      );
-      Alert.alert(
-        "Error",
-        "Could not complete background cancellation protocol.",
-      );
+      console.error("Failed to query full invoice sub-arrays mapping:", error);
     } finally {
-      setIsActionLoading(false);
+      setLoading(false);
+    }
+  }
+
+  const handlePrintCommand = async () => {
+    if (!metadata || reprinting) return;
+    setReprinting(true);
+
+    try {
+      const success = await printReceipt(
+        {
+          shopName: metadata.shop_name,
+          date: metadata.invoice_date,
+          totalBoxes: metadata.total_boxes,
+          totalAmount: metadata.total_amount,
+          cashPaid: metadata.cash_amount,
+          paytmPaid: metadata.paytm_amount,
+          udhaar: metadata.udhaar_amount,
+          items: items,
+        },
+        printerAddress,
+      );
+
+      if (success) {
+        Alert.alert("सफलता (Success)", "बिल दोबारा प्रिंट हो गया है।");
+      }
+    } catch (error) {
+      Alert.alert("एरर", "प्रिंट करने में समस्या आई।");
+    } finally {
+      setReprinting(false);
     }
   };
 
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#007AFF" />
+        <ActivityIndicator size="large" color="#111827" />
       </View>
     );
   }
 
-  if (!invoice) {
+  if (!metadata) {
     return (
       <View style={styles.center}>
-        <Text style={styles.errorText}>
-          Invoice data entry record could not be found.
-        </Text>
+        <Text style={styles.errorText}>बिल का डेटा नहीं मिला।</Text>
       </View>
     );
   }
-
-  const isCancelled = invoice.status === "cancelled";
 
   return (
     <View style={styles.container}>
-      {/* Header Panel Navigation Ribbon */}
+      {/* Pinned Top Navigation Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <Text style={styles.backBtnText}>⬅️ Back</Text>
+          <Feather name="arrow-left" size={24} color="#111827" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Invoice Information</Text>
+        <Text style={styles.headerTitle}>बिल का विवरण</Text>
+        <View style={{ width: 44 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContainer}>
-        {/* Core Detail Target Summary Box */}
-        <View
-          style={[styles.infoCard, isCancelled && styles.infoCardCancelled]}
-        >
-          <View style={styles.infoRowSpace}>
-            <Text
-              style={[styles.shopName, isCancelled && styles.strikethrough]}
-            >
-              {invoice.shop_name}
-            </Text>
-            {isCancelled && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>CANCELLED</Text>
-              </View>
-            )}
-          </View>
-          {invoice.shop_phone && (
-            <Text style={styles.subDetailText}>📞 {invoice.shop_phone}</Text>
-          )}
-          <Text style={styles.subDetailText}>
-            📅 Date: {invoice.invoice_date}
+      <ScrollView
+        contentContainerStyle={styles.scrollContainer}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Core Invoice Summary Receipt Frame */}
+        <View style={styles.receiptPaperCard}>
+          <Text style={styles.invoiceMetaLabel}>दुकान विवरण</Text>
+          <Text style={styles.shopNameText}>{metadata.shop_name}</Text>
+          <Text style={styles.dateTimestampText}>
+            तारीख: {metadata.invoice_date}
           </Text>
-        </View>
 
-        {/* Detailed Item Layout Card */}
-        <View style={styles.itemsCard}>
-          <Text style={styles.cardHeaderTitle}>
-            सामान का विवरण (Items Breakdown)
-          </Text>
-          <View style={styles.divider} />
-          {items.map((item) => (
-            <View key={item.id} style={styles.itemRow}>
+          <View style={styles.receiptLineDivider} />
+
+          {/* Clean Itemization Headings Layer */}
+          <View style={styles.tableHeaderRow}>
+            <Text style={[styles.thText, { flex: 0.5 }]}>सामान (Item)</Text>
+            <Text style={[styles.thText, { flex: 0.25, textAlign: "center" }]}>
+              पेटी
+            </Text>
+            <Text style={[styles.thText, { flex: 0.25, textAlign: "right" }]}>
+              कुल दाम
+            </Text>
+          </View>
+          <View style={styles.receiptLineDivider} />
+
+          {/* Product Items Loop Rows */}
+          {items.map((item, index) => (
+            <View key={index} style={styles.itemTableRow}>
               <Text
-                style={[styles.itemText, isCancelled && styles.strikethrough]}
+                style={[styles.tdItemNameText, { flex: 0.5 }]}
+                numberOfLines={1}
               >
-                {item.sku_name}
+                {item.name}
               </Text>
-              <Text style={styles.itemBoxes}>{item.boxes} Box</Text>
               <Text
-                style={[styles.itemAmt, isCancelled && styles.strikethrough]}
+                style={[styles.tdQtyText, { flex: 0.25, textAlign: "center" }]}
+              >
+                {item.boxes}
+              </Text>
+              <Text
+                style={[styles.tdPriceText, { flex: 0.25, textAlign: "right" }]}
               >
                 ₹{item.amount}
               </Text>
             </View>
           ))}
-          <View style={styles.divider} />
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabelText}>Grand Total:</Text>
-            <Text
-              style={[
-                styles.totalValueText,
-                isCancelled && styles.strikethrough,
-              ]}
-            >
-              ₹{invoice.total_amount}
+
+          <View style={styles.receiptLineDivider} />
+
+          {/* Aggregates Calculations Summary Block */}
+          <View style={styles.aggregateSummaryRow}>
+            <Text style={styles.aggregateLabel}>कुल पेटी (Total Boxes):</Text>
+            <Text style={styles.aggregateValue}>
+              {metadata.total_boxes} पेटी
+            </Text>
+          </View>
+          <View style={[styles.aggregateSummaryRow, { marginTop: 6 }]}>
+            <Text style={styles.aggregateLabelBig}>
+              कुल राशि (Grand Total):
+            </Text>
+            <Text style={styles.aggregateValueBig}>
+              ₹{metadata.total_amount}
             </Text>
           </View>
         </View>
 
-        {/* Detailed Financial Summary Audit Card */}
-        <View style={styles.paymentCard}>
-          <Text style={styles.cardHeaderTitle}>
-            भुगतान का विवरण (Payment Breakdown)
+        {/* Breakdown Distribution Splits block */}
+        <View style={styles.splitPaymentsDetailsCard}>
+          <Text style={styles.sectionTitleLabel}>
+            भुगतान विवरण (Payment Matrix)
           </Text>
-          <View style={styles.divider} />
+          <View style={styles.receiptLineDivider} />
 
-          <View style={styles.paymentRow}>
-            <Text style={styles.paymentLabel}>नकद प्राप्त (Cash Paid):</Text>
-            <Text style={styles.paymentValue}>₹{invoice.cash_amount}</Text>
-          </View>
-
-          <View style={styles.paymentRow}>
-            <Text style={styles.paymentLabel}>Paytm / Online:</Text>
-            <Text style={styles.paymentValue}>₹{invoice.paytm_amount}</Text>
-          </View>
-
-          <View style={[styles.paymentRow, styles.udhaarHighlightRow]}>
-            <Text style={styles.udhaarLabel}>बाकी उधार (Udhaar Due):</Text>
-            <Text
-              style={[
-                styles.udhaarValue,
-                invoice.udhaar_amount > 0 &&
-                  !isCancelled &&
-                  styles.udhaarAlertText,
-              ]}
-            >
-              ₹{invoice.udhaar_amount}
+          <View style={styles.splitPaymentDataRow}>
+            <Text style={styles.splitPaymentLabel}>
+              नकद प्राप्त (Cash Paid):
+            </Text>
+            <Text style={styles.splitPaymentValue}>
+              ₹{metadata.cash_amount}
             </Text>
           </View>
-        </View>
 
-        {/* Action Controls Panel Layout */}
-        <View style={styles.actionsContainer}>
-          <TouchableOpacity
-            style={styles.reprintBtn}
-            onPress={handleReprint}
-            disabled={isActionLoading}
-          >
-            <Text style={styles.reprintBtnText}>🖨️ Reprint Copy</Text>
-          </TouchableOpacity>
+          <View style={styles.splitPaymentDataRow}>
+            <Text style={styles.splitPaymentLabel}>
+              Paytm / ऑनलाइन प्राप्त:
+            </Text>
+            <Text style={[styles.splitPaymentValue, { color: "#2563EB" }]}>
+              ₹{metadata.paytm_amount}
+            </Text>
+          </View>
 
-          {!isCancelled && (
-            <TouchableOpacity
-              style={styles.cancelBtn}
-              onPress={handleCancelInvoice}
-              disabled={isActionLoading}
+          <View style={styles.splitPaymentDataRow}>
+            <Text style={styles.splitPaymentLabel}>
+              बाकी उधार (Udhaar Balance):
+            </Text>
+            <Text
+              style={[
+                styles.splitPaymentValue,
+                metadata.udhaar_amount > 0
+                  ? styles.alertTextColor
+                  : { color: "#10B981" },
+              ]}
             >
-              <Text style={styles.cancelBtnText}>
-                ❌ Cancel Bill (Revert Stock)
-              </Text>
-            </TouchableOpacity>
-          )}
+              ₹{metadata.udhaar_amount}
+            </Text>
+          </View>
         </View>
       </ScrollView>
+
+      {/* Raised Fixed Bottom Action Trigger Strip */}
+      <View style={styles.fixedFooterContainer}>
+        <TouchableOpacity
+          style={[
+            styles.actionSubmitBtn,
+            reprinting && styles.btnDisabledState,
+          ]}
+          activeOpacity={0.9}
+          onPress={handlePrintCommand}
+          disabled={reprinting}
+        >
+          {reprinting ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <>
+              <Feather
+                name="printer"
+                size={20}
+                color="#FFFFFF"
+                style={{ marginRight: 8 }}
+              />
+              <Text style={styles.actionSubmitBtnText}>
+                दोबारा प्रिंट करें (Reprint Invoice)
+              </Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -345,223 +285,195 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F3F4F6",
-    paddingTop: 50,
+    paddingTop: 44,
   },
   header: {
     flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
+    backgroundColor: "#FFFFFF",
     paddingHorizontal: 16,
-    paddingBottom: 16,
+    paddingVertical: 14,
     borderBottomWidth: 1,
     borderColor: "#E5E7EB",
-    backgroundColor: "#FFFFFF",
-    gap: 12,
   },
   backBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    backgroundColor: "#F3F4F6",
-    borderRadius: 8,
-  },
-  backBtnText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#4B5563",
+    width: 44,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
   },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#1F2937",
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#111827",
   },
   center: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
+    backgroundColor: "#F3F4F6",
   },
   errorText: {
     fontSize: 16,
-    color: "#EF4444",
+    color: "#6B7280",
+    fontWeight: "700",
   },
   scrollContainer: {
-    padding: 16,
-    paddingBottom: 30,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 150, // Runway offset parameter prevents element hiding beneath sticky actions strip
   },
-  infoCard: {
+  receiptPaperCard: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    padding: 16,
+    borderRadius: 22,
+    padding: 20,
     borderWidth: 1,
     borderColor: "#E5E7EB",
     marginBottom: 16,
+    elevation: 1,
   },
-  infoCardCancelled: {
-    backgroundColor: "#FEF2F2",
-    borderColor: "#FEE2E2",
-  },
-  infoRowSpace: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 6,
-  },
-  shopName: {
-    fontSize: 22,
-    fontWeight: "bold",
-    color: "#1F2937",
-    flex: 0.7,
-  },
-  badge: {
-    backgroundColor: "#EF4444",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  badgeText: {
-    color: "#FFFFFF",
-    fontSize: 11,
-    fontWeight: "bold",
-  },
-  subDetailText: {
-    fontSize: 14,
+  invoiceMetaLabel: {
+    fontSize: 12,
     color: "#6B7280",
-    marginTop: 4,
-    fontWeight: "500",
-  },
-  itemsCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    marginBottom: 16,
-  },
-  cardHeaderTitle: {
-    fontSize: 15,
     fontWeight: "700",
-    color: "#4B5563",
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
-  divider: {
+  shopNameText: {
+    fontSize: 22,
+    fontWeight: "900",
+    color: "#111827",
+    marginTop: 4,
+  },
+  dateTimestampText: {
+    fontSize: 14,
+    color: "#4B5563",
+    fontWeight: "700",
+    marginTop: 2,
+  },
+  receiptLineDivider: {
     height: 1,
-    backgroundColor: "#E5E7EB",
-    marginVertical: 12,
+    backgroundColor: "#F3F4F6",
+    marginVertical: 14,
   },
-  itemRow: {
+  tableHeaderRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: 6,
   },
-  itemText: {
-    fontSize: 18,
-    color: "#1F2937",
-    fontWeight: "500",
-    flex: 0.5,
-  },
-  itemBoxes: {
-    fontSize: 16,
+  thText: {
+    fontSize: 13,
     color: "#6B7280",
-    fontWeight: "600",
-    flex: 0.25,
-    textAlign: "center",
+    fontWeight: "700",
+    textTransform: "uppercase",
   },
-  itemAmt: {
+  itemTableRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 10,
+  },
+  tdItemNameText: {
     fontSize: 18,
-    color: "#1F2937",
-    fontWeight: "600",
-    flex: 0.25,
-    textAlign: "right",
+    color: "#111827",
+    fontWeight: "700",
   },
-  totalRow: {
+  tdQtyText: {
+    fontSize: 16,
+    color: "#4B5563",
+    fontWeight: "700",
+  },
+  tdPriceText: {
+    fontSize: 18,
+    color: "#111827",
+    fontWeight: "800",
+  },
+  aggregateSummaryRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
   },
-  totalLabelText: {
-    fontSize: 16,
-    fontWeight: "bold",
+  aggregateLabel: {
+    fontSize: 15,
+    fontWeight: "700",
     color: "#4B5563",
   },
-  totalValueText: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: "#007AFF",
+  aggregateValue: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#111827",
   },
-  paymentCard: {
+  aggregateLabelBig: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#4B5563",
+  },
+  aggregateValueBig: {
+    fontSize: 26,
+    fontWeight: "900",
+    color: "#111827",
+  },
+  splitPaymentsDetailsCard: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 16,
+    borderRadius: 22,
     padding: 16,
     borderWidth: 1,
     borderColor: "#E5E7EB",
-    marginBottom: 24,
+    elevation: 1,
   },
-  paymentRow: {
+  sectionTitleLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#6B7280",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  splitPaymentDataRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingVertical: 6,
-  },
-  paymentLabel: {
-    fontSize: 16,
-    color: "#4B5563",
-    fontWeight: "500",
-  },
-  paymentValue: {
-    fontSize: 16,
-    color: "#1F2937",
-    fontWeight: "600",
-  },
-  udhaarHighlightRow: {
-    backgroundColor: "#F9FAFB",
-    padding: 10,
-    borderRadius: 8,
-    marginTop: 6,
     alignItems: "center",
+    paddingVertical: 8,
   },
-  udhaarLabel: {
-    fontSize: 16,
-    fontWeight: "600",
+  splitPaymentLabel: {
+    fontSize: 15,
+    fontWeight: "700",
     color: "#4B5563",
   },
-  udhaarValue: {
-    fontSize: 20,
-    fontWeight: "bold",
-    color: "#10B981",
+  splitPaymentValue: {
+    fontSize: 19,
+    fontWeight: "800",
+    color: "#111827",
   },
-  udhaarAlertText: {
-    color: "#EF4444",
+  alertTextColor: {
+    color: "#DC2626",
   },
-  actionsContainer: {
-    gap: 14,
+  fixedFooterContainer: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "#FFFFFF",
+    borderTopWidth: 1,
+    borderColor: "#E5E7EB",
+    paddingTop: 14,
+    paddingHorizontal: 20,
+    paddingBottom: 38, // Clean raised layout clearance avoids structural hardware buttons conflicts
+    elevation: 16,
   },
-  reprintBtn: {
-    backgroundColor: "#007AFF",
+  actionSubmitBtn: {
+    backgroundColor: "#111827",
     height: 56,
-    borderRadius: 14,
+    borderRadius: 16,
     justifyContent: "center",
     alignItems: "center",
+    flexDirection: "row",
   },
-  reprintBtnText: {
+  btnDisabledState: {
+    backgroundColor: "#9CA3AF",
+  },
+  actionSubmitBtnText: {
     color: "#FFFFFF",
-    fontSize: 18,
-    fontWeight: "bold",
-  },
-  cancelBtn: {
-    backgroundColor: "#FEF2F2",
-    borderWidth: 1,
-    borderColor: "#FEE2E2",
-    height: 56,
-    borderRadius: 14,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  cancelBtnText: {
-    color: "#EF4444",
-    fontSize: 16,
-    fontWeight: "bold",
-  },
-  strikethrough: {
-    textDecorationLine: "line-through",
-    color: "#9CA3AF",
+    fontSize: 17,
+    fontWeight: "800",
   },
 });

@@ -1,4 +1,5 @@
 import { printReceipt } from "@/src/utils/printer";
+import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
@@ -32,7 +33,7 @@ export default function CartPaymentScreen() {
   const [paytmInput, setPaytmInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Compute total layout calculations
+  // Compute totals
   const totalBoxes = Object.values(cart).reduce(
     (sum, item) => sum + item.boxes,
     0,
@@ -44,11 +45,8 @@ export default function CartPaymentScreen() {
 
   const cashAmount = parseFloat(cashInput) || 0;
   const paytmAmount = parseFloat(paytmInput) || 0;
-
-  // Udhaar is strictly auto-calculated as the remaining balance
   const udhaarAmount = Math.max(0, totalAmount - (cashAmount + paytmAmount));
 
-  // Shortcut to clear inputs and mark full amount paid via cash instantly
   const handleFullCashShortcut = () => {
     setCashInput(totalAmount.toString());
     setPaytmInput("");
@@ -58,10 +56,7 @@ export default function CartPaymentScreen() {
     if (isSubmitting) return;
 
     if (cashAmount + paytmAmount > totalAmount) {
-      Alert.alert(
-        "Error",
-        "दर्ज की गई राशि कुल बिल से अधिक है! (Entered money exceeds total bill!)",
-      );
+      Alert.alert("गलत राशि (Error)", "दर्ज की गई राशि कुल बिल से अधिक है!");
       return;
     }
 
@@ -78,7 +73,6 @@ export default function CartPaymentScreen() {
       const todayStr = new Date().toISOString().split("T")[0];
       const timestamp = new Date().toISOString();
 
-      // 1. Actually attempt to print FIRST, so we know whether it succeeded
       const printSuccess = await printReceipt(
         {
           shopName: currentShopName || "Unknown Shop",
@@ -98,7 +92,6 @@ export default function CartPaymentScreen() {
         printerAddress,
       );
 
-      // 2. Save invoice with the REAL printed status, not a hardcoded 1
       await db.runAsync(
         `INSERT INTO invoice (
         id, display_number, shop_id, invoice_date, created_at, 
@@ -149,27 +142,23 @@ export default function CartPaymentScreen() {
       resetInvoiceSession();
 
       if (!printSuccess) {
-        // Invoice is saved either way (offline-safe), but let them know printing failed
         Alert.alert(
-          "Saved, but Printing Failed",
-          "बिल सहेजा गया लेकिन प्रिंट नहीं हुआ। आप इसे बाद में 'Old Invoices' से दोबारा प्रिंट कर सकते हैं। (Invoice saved but did not print. You can reprint it later from Old Invoices.)",
-          [{ text: "OK", onPress: () => router.replace("/(driver)") }],
+          "बिल सुरक्षित हुआ, प्रिंट फेल",
+          "बिल सहेजा गया लेकिन प्रिंट नहीं हुआ। आप इसे बाद में 'Old Invoices' से दोबारा प्रिंट कर सकते हैं।",
+          [{ text: "ठीक है (OK)", onPress: () => router.replace("/(driver)") }],
           { cancelable: false },
         );
       } else {
         Alert.alert(
-          "Success",
-          "बिल सहेजा गया और प्रिंट हो गया! (Invoice Saved & Printed!)",
-          [{ text: "OK", onPress: () => router.replace("/(driver)") }],
+          "सफलता (Success)",
+          "बिल सुरक्षित हो गया और प्रिंट भी निकाल दिया गया है!",
+          [{ text: "ठीक है (OK)", onPress: () => router.replace("/(driver)") }],
           { cancelable: false },
         );
       }
     } catch (error) {
       console.error("Failed to commit invoice records:", error);
-      Alert.alert(
-        "Database Error",
-        "Could not compile and save invoice. Please try again.",
-      );
+      Alert.alert("डेटाबेस एरर", "बिल सुरक्षित नहीं किया जा सका।");
       setIsSubmitting(false);
     }
   };
@@ -179,21 +168,24 @@ export default function CartPaymentScreen() {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       style={styles.container}
     >
-      <ScrollView contentContainerStyle={styles.scrollContainer}>
-        {/* Cart Review Card Header */}
-        <View style={styles.cardHeader}>
-          <Text style={styles.shopName}>🏪 {currentShopName}</Text>
-          <TouchableOpacity
-            style={styles.editLink}
-            onPress={() => router.back()}
-          >
-            <Text style={styles.editLinkText}>📝 Edit Items</Text>
-          </TouchableOpacity>
-        </View>
+      {/* Header Panel */}
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+          <Feather name="arrow-left" size={24} color="#111827" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {currentShopName}
+        </Text>
+        <View style={{ width: 44 }} />
+      </View>
 
-        {/* Dynamic Items Table */}
+      <ScrollView
+        contentContainerStyle={styles.scrollContainer}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Items Table Summary */}
         <View style={styles.tableCard}>
-          <Text style={styles.cardTitle}>सामान की सूची (Items Summary)</Text>
+          <Text style={styles.cardTitle}>सामान की सूची (Cart Summary)</Text>
           <View style={styles.tableDivider} />
 
           {Object.values(cart).map((item) => (
@@ -201,7 +193,7 @@ export default function CartPaymentScreen() {
               <Text style={styles.itemNameText} numberOfLines={1}>
                 {item.name}
               </Text>
-              <Text style={styles.itemQtyText}>{item.boxes} Box</Text>
+              <Text style={styles.itemQtyText}>{item.boxes} पेटी</Text>
               <Text style={styles.itemPriceText}>
                 ₹{item.boxes * item.price}
               </Text>
@@ -210,26 +202,31 @@ export default function CartPaymentScreen() {
 
           <View style={styles.tableDivider} />
           <View style={styles.grandTotalRow}>
-            <Text style={styles.totalLabel}>Grand Total:</Text>
+            <Text style={styles.totalLabel}>कुल बिल (Grand Total):</Text>
             <Text style={styles.totalValue}>₹{totalAmount}</Text>
           </View>
         </View>
 
-        {/* Payment Configuration Form Block */}
+        {/* Payment Configuration Inputs Block */}
         <View style={styles.paymentCard}>
           <View style={styles.paymentCardHeader}>
-            <Text style={styles.cardTitle}>
-              भुगतान का विवरण (Payment Split)
-            </Text>
+            <Text style={styles.cardTitle}>भुगतान विवरण (Payment)</Text>
             <TouchableOpacity
               style={styles.shortcutBtn}
+              activeOpacity={0.7}
               onPress={handleFullCashShortcut}
             >
-              <Text style={styles.shortcutBtnText}>💵 Full Cash</Text>
+              {/* <Feather
+                name="dollar-sign"
+                size={14}
+                color="#111827"
+                style={{ marginRight: 2 }}
+              /> */}
+              <Text style={styles.shortcutBtnText}>पूरा नकद</Text>
             </TouchableOpacity>
           </View>
 
-          {/* Cash Input */}
+          {/* Cash Received input stack */}
           <View style={styles.inputGroup}>
             <Text style={styles.inputLabel}>नकद प्राप्त (Cash Received)</Text>
             <TextInput
@@ -242,9 +239,9 @@ export default function CartPaymentScreen() {
             />
           </View>
 
-          {/* Paytm Input */}
+          {/* Paytm Received input stack */}
           <View style={styles.inputGroup}>
-            <Text style={styles.inputLabel}>Paytm / Online Received</Text>
+            <Text style={styles.inputLabel}>Paytm / ऑनलाइन प्राप्त</Text>
             <TextInput
               style={styles.numericInput}
               placeholder="₹0"
@@ -255,11 +252,9 @@ export default function CartPaymentScreen() {
             />
           </View>
 
-          {/* Passive Remainder Read-Only Output Fields */}
+          {/* Automatic Dynamic Udhaar Readout Row */}
           <View style={styles.udhaarRow}>
-            <Text style={styles.udhaarLabel}>
-              बाकी उधार (Auto Udhaar Balance):
-            </Text>
+            <Text style={styles.udhaarLabel}>बाकी उधार (Udhaar Balance):</Text>
             <Text
               style={[
                 styles.udhaarValue,
@@ -271,14 +266,21 @@ export default function CartPaymentScreen() {
           </View>
         </View>
 
-        {/* Massive Execution Action Button */}
+        {/* Massive Primary Printing Execution Button */}
         <TouchableOpacity
           style={[styles.printButton, isSubmitting && styles.disabledButton]}
           disabled={isSubmitting}
+          activeOpacity={0.9}
           onPress={handlePrintAndSave}
         >
+          <Feather
+            name="printer"
+            size={20}
+            color="#FFFFFF"
+            style={{ marginRight: 8 }}
+          />
           <Text style={styles.printButtonText}>
-            {isSubmitting ? "Saving..." : "🖨️ बिल निकालें (Print & Save Bill)"}
+            {isSubmitting ? "सुरक्षित हो रहा है..." : "बिल निकालें"}
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -290,47 +292,49 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F3F4F6",
+    paddingTop: 44,
   },
-  scrollContainer: {
-    paddingTop: 60,
-    paddingHorizontal: 16,
-    paddingBottom: 40,
-  },
-  cardHeader: {
+  header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 16,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderColor: "#E5E7EB",
   },
-  shopName: {
-    fontSize: 22,
-    fontWeight: "bold",
-    color: "#1F2937",
-    flex: 0.7,
+  backBtn: {
+    width: 44,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
   },
-  editLink: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    backgroundColor: "#E5E7EB",
-    borderRadius: 8,
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#111827",
+    flex: 1,
+    textAlign: "center",
   },
-  editLinkText: {
-    color: "#4B5563",
-    fontWeight: "600",
-    fontSize: 14,
+  scrollContainer: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 60,
   },
   tableCard: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 16,
+    borderRadius: 22,
     padding: 16,
     borderWidth: 1,
     borderColor: "#E5E7EB",
     marginBottom: 16,
+    elevation: 1,
   },
   cardTitle: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: "700",
-    color: "#374151",
+    color: "#4B5563",
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
@@ -343,25 +347,25 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingVertical: 6,
+    paddingVertical: 8,
   },
   itemNameText: {
     fontSize: 18,
-    color: "#1F2937",
-    fontWeight: "500",
+    color: "#111827",
+    fontWeight: "700",
     flex: 0.5,
   },
   itemQtyText: {
     fontSize: 16,
-    color: "#6B7280",
+    color: "#4B5563",
     flex: 0.25,
     textAlign: "center",
-    fontWeight: "600",
+    fontWeight: "700",
   },
   itemPriceText: {
     fontSize: 18,
-    color: "#1F2937",
-    fontWeight: "600",
+    color: "#111827",
+    fontWeight: "700",
     flex: 0.25,
     textAlign: "right",
   },
@@ -369,24 +373,26 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    paddingTop: 4,
   },
   totalLabel: {
-    fontSize: 18,
-    fontWeight: "bold",
+    fontSize: 16,
+    fontWeight: "700",
     color: "#4B5563",
   },
   totalValue: {
     fontSize: 26,
-    fontWeight: "bold",
-    color: "#007AFF",
+    fontWeight: "900",
+    color: "#111827",
   },
   paymentCard: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 16,
+    borderRadius: 22,
     padding: 16,
     borderWidth: 1,
     borderColor: "#E5E7EB",
-    marginBottom: 24,
+    marginBottom: 20,
+    elevation: 1,
   },
   paymentCardHeader: {
     flexDirection: "row",
@@ -395,16 +401,18 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   shortcutBtn: {
-    backgroundColor: "#EFF6FF",
-    borderWidth: 1,
-    borderColor: "#BFDBFE",
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderWidth: 2,
+    borderColor: "#111827", // Thicker slate-black frame
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 10,
   },
   shortcutBtnText: {
-    color: "#1D4ED8",
-    fontWeight: "700",
+    color: "#111827",
+    fontWeight: "800",
     fontSize: 14,
   },
   inputGroup: {
@@ -412,20 +420,20 @@ const styles = StyleSheet.create({
   },
   inputLabel: {
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "700",
     color: "#4B5563",
-    marginBottom: 6,
+    marginBottom: 8,
   },
   numericInput: {
-    backgroundColor: "#F9FAFB",
+    backgroundColor: "#F3F4F6",
     borderWidth: 1,
-    borderColor: "#D1D5DB",
+    borderColor: "#E5E7EB",
     height: 54,
-    borderRadius: 10,
+    borderRadius: 12,
     paddingHorizontal: 16,
-    fontSize: 20,
-    fontWeight: "bold",
-    color: "#1F2937",
+    fontSize: 22,
+    fontWeight: "800",
+    color: "#111827",
   },
   udhaarRow: {
     flexDirection: "row",
@@ -433,42 +441,39 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "#F9FAFB",
     padding: 14,
-    borderRadius: 10,
+    borderRadius: 14,
     marginTop: 8,
     borderWidth: 1,
     borderColor: "#E5E7EB",
   },
   udhaarLabel: {
     fontSize: 15,
-    fontWeight: "600",
+    fontWeight: "700",
     color: "#4B5563",
   },
   udhaarValue: {
     fontSize: 22,
-    fontWeight: "bold",
+    fontWeight: "900",
     color: "#10B981",
   },
   udhaarAlertText: {
-    color: "#EF4444",
+    color: "#DC2626",
   },
   printButton: {
-    backgroundColor: "#007AFF",
-    height: 60,
+    backgroundColor: "#111827",
+    height: 58,
     borderRadius: 16,
     justifyContent: "center",
     alignItems: "center",
-    elevation: 3,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    flexDirection: "row",
+    marginBottom: 30,
   },
   disabledButton: {
     backgroundColor: "#9CA3AF",
   },
   printButtonText: {
     color: "#FFFFFF",
-    fontSize: 20,
-    fontWeight: "bold",
+    fontSize: 18,
+    fontWeight: "800",
   },
 });

@@ -1,179 +1,257 @@
+import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    KeyboardAvoidingView,
-    Platform,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import "react-native-get-random-values";
 import { v4 as uuidv4 } from "uuid";
 import { getDB } from "../../src/db/local/sqlite";
-import { useAppStore } from "../../src/store/appStore";
 
-interface ActiveSKU {
+interface SKUStockRow {
   id: string;
   name: string;
-  brand: string | null;
   size: string | null;
+  current_stock: number;
 }
 
-export default function LoadStockScreen() {
+export default function LoadDailyStockScreen() {
   const router = useRouter();
-  const { deviceId } = useAppStore();
-  const [loading, setLoading] = useState(true);
-  const [skus, setSkus] = useState<ActiveSKU[]>([]);
-  const [loadQuantities, setLoadQuantities] = useState<Record<string, string>>(
+  const [items, setItems] = useState<SKUStockRow[]>([]);
+  const [loadQuantities, setLoadQuantities] = useState<Record<string, number>>(
     {},
   );
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    async function fetchActiveSkus() {
-      try {
-        const db = await getDB();
-        const rows = await db.getAllAsync<ActiveSKU>(
-          "SELECT id, name, brand, size FROM sku WHERE active = 1 ORDER BY brand ASC, name ASC",
-        );
-        setSkus(rows);
-      } catch (error) {
-        console.error("Failed to fetch SKUs for loading:", error);
-        Alert.alert("Error", "Could not load item list.");
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchActiveSkus();
+    loadInventoryMetrics();
   }, []);
 
-  const handleQuantityChange = (id: string, value: string) => {
-    // Only allow numeric input
-    const numericValue = value.replace(/[^0-9]/g, "");
-    setLoadQuantities((prev) => ({
-      ...prev,
-      [id]: numericValue,
-    }));
+  async function loadInventoryMetrics() {
+    try {
+      const db = await getDB();
+      const rows = await db.getAllAsync<any>(
+        `SELECT 
+            s.id, s.name, s.size,
+            COALESCE(SUM(l.quantity), 0) as current_stock
+         FROM sku s
+         LEFT JOIN stock_ledger l ON s.id = l.sku_id
+         WHERE s.active = 1
+         GROUP BY s.id
+         ORDER BY s.brand ASC, s.name ASC`,
+      );
+      setItems(rows);
+    } catch (error) {
+      console.error("Failed to load warehouse quantities:", error);
+    }
+  }
+
+  // Stepper adjustment handler - Allows numbers to go negative freely
+  const adjustQty = (skuId: string, delta: number) => {
+    setLoadQuantities((prev) => {
+      const currentVal = prev[skuId] || 0;
+      return { ...prev, [skuId]: currentVal + delta };
+    });
   };
 
-  const handleSaveStock = async () => {
-    if (isSubmitting) return;
-
-    // Filter out items that have no quantity entered or are zero
-    const itemsToLoad = Object.entries(loadQuantities)
-      .map(([id, qtyStr]) => ({ id, qty: parseInt(qtyStr, 10) }))
-      .filter((item) => !isNaN(item.qty) && item.qty > 0);
-
-    if (itemsToLoad.length === 0) {
-      Alert.alert("No Data", "Please enter at least one box quantity to load.");
+  // Manual keyboard input handler - Safely handles typed minus signs
+  const handleManualInput = (skuId: string, text: string) => {
+    // Allows absolute negative tracking parameters if the user types a minus sign
+    if (text === "-") {
+      setLoadQuantities((prev) => ({ ...prev, [skuId]: 0 }));
       return;
     }
 
-    setIsSubmitting(true);
+    const cleanNum = parseInt(text) || 0;
+    setLoadQuantities((prev) => ({ ...prev, [skuId]: cleanNum }));
+  };
 
+  const handleSaveStockLoad = async () => {
+    const validEntries = Object.entries(loadQuantities).filter(
+      ([_, qty]) => qty !== 0,
+    );
+
+    if (validEntries.length === 0) {
+      Alert.alert(
+        "सूचना",
+        "कृपया कम से कम एक आइटम में मात्रा (+ या -) दर्ज करें।",
+      );
+      return;
+    }
+
+    setIsSaving(true);
     try {
       const db = await getDB();
       const todayStr = new Date().toISOString().split("T")[0];
       const timestamp = new Date().toISOString();
+      const placeholderDeviceId = "ADMIN-CONSOLE";
 
-      for (const item of itemsToLoad) {
+      for (const [skuId, qty] of validEntries) {
         const ledgerId = uuidv4();
+        // Negative quantities automatically subtract from stock ledger balances, positive ones load them in
+        const entryTypeLabel = qty > 0 ? "load" : "unload";
+
         await db.runAsync(
           `INSERT INTO stock_ledger (
             id, sku_id, entry_date, quantity, entry_type, invoice_id, created_at, device_id, synced
-          ) VALUES (?, ?, ?, ?, 'load', null, ?, ?, 0)`,
-          [ledgerId, item.id, todayStr, item.qty, timestamp, deviceId],
+          ) VALUES (?, ?, ?, ?, ?, null, ?, ?, 0)`,
+          [
+            ledgerId,
+            skuId,
+            todayStr,
+            qty,
+            entryTypeLabel,
+            timestamp,
+            placeholderDeviceId,
+          ],
         );
       }
 
-      Alert.alert("Success", "Stock loaded successfully!", [
-        {
-          text: "OK",
-          onPress: () => {
-            // Clear inputs and go back to dashboard
-            setLoadQuantities({});
-            router.back();
-          },
-        },
+      Alert.alert("सफलता", "स्टॉक अपडेट सफलतापूर्वक सुरक्षित हो गया है!", [
+        { text: "ठीक है", onPress: () => router.back() },
       ]);
     } catch (error) {
-      console.error("Failed to save stock loads:", error);
-      Alert.alert("Database Error", "Could not save the stock load.");
+      console.error("Database transaction failure saving changes:", error);
+      Alert.alert("एरर", "स्टॉक लोड सहेजने में त्रुटि हुई।");
     } finally {
-      setIsSubmitting(false);
+      setIsSaving(false);
     }
   };
 
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#3B82F6" />
-      </View>
-    );
-  }
+  // Real-time calculated counters summary metrics breakdown
+  const totalLoaded = Object.values(loadQuantities).reduce(
+    (sum, val) => (val > 0 ? sum + val : sum),
+    0,
+  );
+  const totalUnloaded = Object.values(loadQuantities).reduce(
+    (sum, val) => (val < 0 ? sum + Math.abs(val) : sum),
+    0,
+  );
 
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       style={styles.container}
     >
-      {/* Header */}
+      {/* Pinned Header Panel */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <Text style={styles.backBtnText}>⬅️ Back</Text>
+          <Feather name="arrow-left" size={24} color="#111827" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Load Van Stock</Text>
+        <Text style={styles.headerTitle}>दैनिक स्टॉक लोड / अनलोड</Text>
+        <View style={{ width: 44 }} />
       </View>
 
-      {/* Main List */}
+      {/* Clean Dynamic Combined Overview Summary Ribbon */}
+      <View style={styles.summaryBarCard}>
+        <Text style={styles.summaryBarText}>
+          लोड: <Text style={styles.loadHighlight}>{totalLoaded} पेटी</Text> |
+          अनलोड:{" "}
+          <Text style={styles.unloadHighlight}>{totalUnloaded} पेटी</Text>
+        </Text>
+      </View>
+
+      {/* Main Stock Allocation List Feed */}
       <FlatList
-        data={skus}
+        data={items}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContainer}
-        ListHeaderComponent={
-          <View style={styles.listHeader}>
-            <Text style={styles.subtitle}>
-              Enter the number of boxes added to the van today.
-            </Text>
-          </View>
-        }
-        renderItem={({ item }) => (
-          <View style={styles.row}>
-            <View style={styles.itemInfo}>
-              <Text style={styles.itemName} numberOfLines={1}>
-                {item.name}
-              </Text>
-              <Text style={styles.itemSpecs}>
-                {item.brand} • {item.size}
-              </Text>
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        renderItem={({ item }) => {
+          const currentQty = loadQuantities[item.id] || 0;
+          const isPositive = currentQty > 0;
+          const isNegative = currentQty < 0;
+
+          return (
+            <View
+              style={[
+                styles.productRowCard,
+                isPositive && styles.rowActiveLoad,
+                isNegative && styles.rowActiveUnload,
+              ]}
+            >
+              {/* Left Side: Product Identity specs elements */}
+              <View style={styles.skuMetaDataBlock}>
+                <Text style={styles.skuNameText} numberOfLines={1}>
+                  {item.name}
+                </Text>
+                <Text style={styles.skuSubDetailsLabel}>
+                  {item.size || "Standard"} • वैन में अभी: {item.current_stock}{" "}
+                  पेटी
+                </Text>
+              </View>
+
+              {/* Right Side: High contrast 3-Way Steppers Action Module */}
+              <View
+                style={[
+                  styles.stepperInputGroup,
+                  isNegative && styles.stepperInputGroupAlert,
+                ]}
+              >
+                <TouchableOpacity
+                  style={styles.stepperActionBtn}
+                  activeOpacity={0.6}
+                  onPress={() => adjustQty(item.id, -1)}
+                >
+                  <Feather name="minus" size={16} color="#111827" />
+                </TouchableOpacity>
+
+                <View style={styles.centerInputWrap}>
+                  <TextInput
+                    style={[
+                      styles.embeddedInputBox,
+                      currentQty !== 0 && styles.embeddedInputBoxBold,
+                      isNegative && styles.negativeText,
+                    ]}
+                    value={currentQty === 0 ? "" : currentQty.toString()}
+                    placeholder="0"
+                    placeholderTextColor="#9CA3AF"
+                    keyboardType="numbers-and-punctuation" // Allows inputting minus signs natively on specialized keypads
+                    onChangeText={(text) => handleManualInput(item.id, text)}
+                  />
+                </View>
+
+                <TouchableOpacity
+                  style={styles.stepperActionBtn}
+                  activeOpacity={0.6}
+                  onPress={() => adjustQty(item.id, 1)}
+                >
+                  <Feather name="plus" size={16} color="#111827" />
+                </TouchableOpacity>
+              </View>
             </View>
-            <TextInput
-              style={styles.input}
-              placeholder="0"
-              placeholderTextColor="#9CA3AF"
-              keyboardType="number-pad"
-              value={loadQuantities[item.id] || ""}
-              onChangeText={(val) => handleQuantityChange(item.id, val)}
-              maxLength={4}
-            />
-          </View>
-        )}
+          );
+        }}
       />
 
-      {/* Sticky Bottom Save Button */}
-      <View style={styles.footer}>
+      {/* FIXED FOOTER CONTROLS SHEET */}
+      <View style={styles.stickyFooterContainer}>
         <TouchableOpacity
-          style={[styles.saveBtn, isSubmitting && styles.saveBtnDisabled]}
-          onPress={handleSaveStock}
-          disabled={isSubmitting}
+          style={[
+            styles.executionSubmitBtn,
+            isSaving && styles.btnDisabledState,
+          ]}
+          disabled={isSaving}
+          activeOpacity={0.9}
+          onPress={handleSaveStockLoad}
         >
-          <Text style={styles.saveBtnText}>
-            {isSubmitting ? "Saving..." : "💾 Save Stock Load"}
+          <Feather
+            name="check-circle"
+            size={20}
+            color="#FFFFFF"
+            style={{ marginRight: 8 }}
+          />
+          <Text style={styles.executionSubmitBtnText}>
+            {isSaving ? "सुरक्षित हो रहा है..." : "स्टॉक अपडेट सुरक्षित करें"}
           </Text>
         </TouchableOpacity>
       </View>
@@ -185,110 +263,164 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F3F4F6",
+    paddingTop: 44,
   },
   header: {
     flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 50,
-    paddingBottom: 16,
     backgroundColor: "#FFFFFF",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     borderBottomWidth: 1,
     borderColor: "#E5E7EB",
-    gap: 12,
   },
   backBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    backgroundColor: "#F3F4F6",
-    borderRadius: 8,
-  },
-  backBtnText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#4B5563",
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#1F2937",
-  },
-  center: {
-    flex: 1,
+    width: 44,
+    height: 44,
     justifyContent: "center",
     alignItems: "center",
   },
-  listContainer: {
-    padding: 16,
-    paddingBottom: 100,
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#111827",
   },
-  listHeader: {
-    marginBottom: 16,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: "#6B7280",
-  },
-  row: {
-    flexDirection: "row",
+  summaryBarCard: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderColor: "#E5E7EB",
     alignItems: "center",
+  },
+  summaryBarText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#4B5563",
+  },
+  loadHighlight: {
+    color: "#111827",
+    fontWeight: "900",
+  },
+  unloadHighlight: {
+    color: "#DC2626",
+    fontWeight: "900",
+  },
+  listContainer: {
+    padding: 14,
+    paddingBottom: 140,
+  },
+  productRowCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    flexDirection: "row",
     justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    elevation: 1,
+  },
+  rowActiveLoad: {
+    borderColor: "#111827",
+    borderWidth: 2,
+    backgroundColor: "#F8FAFC",
+  },
+  rowActiveUnload: {
+    borderColor: "#DC2626",
+    borderWidth: 2,
+    backgroundColor: "#FEF2F2",
+  },
+  skuMetaDataBlock: {
+    flex: 0.54,
+    justifyContent: "center",
+  },
+  skuNameText: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#111827",
+  },
+  skuSubDetailsLabel: {
+    fontSize: 13,
+    color: "#4B5563",
+    fontWeight: "700",
+    marginTop: 2,
+  },
+  stepperInputGroup: {
+    flex: 0.46,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F3F4F6",
+    borderRadius: 14,
+    padding: 3,
     borderWidth: 1,
     borderColor: "#E5E7EB",
   },
-  itemInfo: {
-    flex: 0.75,
+  stepperInputGroupAlert: {
+    backgroundColor: "#FEE2E2",
+    borderColor: "#FCA5A5",
   },
-  itemName: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#1F2937",
+  stepperActionBtn: {
+    backgroundColor: "#FFFFFF",
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+    elevation: 1,
   },
-  itemSpecs: {
-    fontSize: 13,
-    color: "#6B7280",
-    marginTop: 4,
+  centerInputWrap: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 2,
   },
-  input: {
-    flex: 0.2,
-    backgroundColor: "#F9FAFB",
-    borderWidth: 1,
-    borderColor: "#D1D5DB",
-    borderRadius: 8,
-    height: 48,
-    fontSize: 20,
-    fontWeight: "bold",
+  embeddedInputBox: {
+    width: "100%",
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#4B5563",
     textAlign: "center",
-    color: "#3B82F6",
+    padding: 0,
   },
-  footer: {
+  embeddedInputBoxBold: {
+    fontSize: 18,
+    fontWeight: "900",
+    color: "#111827",
+  },
+  negativeText: {
+    color: "#DC2626",
+  },
+  stickyFooterContainer: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
     backgroundColor: "#FFFFFF",
-    padding: 16,
     borderTopWidth: 1,
     borderColor: "#E5E7EB",
-    elevation: 8,
+    paddingTop: 14,
+    paddingHorizontal: 20,
+    paddingBottom: 38,
+    elevation: 16,
   },
-  saveBtn: {
-    backgroundColor: "#3B82F6",
+  executionSubmitBtn: {
+    backgroundColor: "#111827",
     height: 56,
-    borderRadius: 12,
+    borderRadius: 16,
     justifyContent: "center",
     alignItems: "center",
+    flexDirection: "row",
   },
-  saveBtnDisabled: {
+  btnDisabledState: {
     backgroundColor: "#9CA3AF",
   },
-  saveBtnText: {
+  executionSubmitBtnText: {
     color: "#FFFFFF",
-    fontSize: 18,
-    fontWeight: "bold",
+    fontSize: 17,
+    fontWeight: "800",
   },
 });

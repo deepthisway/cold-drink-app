@@ -1,56 +1,53 @@
+import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
-    Alert,
-    KeyboardAvoidingView,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import "react-native-get-random-values";
 import { v4 as uuidv4 } from "uuid";
 import { getDB } from "../../src/db/local/sqlite";
-import { useAppStore } from "../../src/store/appStore";
 
 export default function NewShopScreen() {
   const router = useRouter();
-  const selectShop = useAppStore((state) => state.selectShop);
-
   const [shopName, setShopName] = useState("");
   const [phone, setPhone] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
-  const handleSaveShop = async () => {
+  const handleCreateShop = async () => {
     if (!shopName.trim()) {
-      Alert.alert(
-        "Error",
-        "कृपया दुकान का नाम दर्ज करें (Please enter shop name)",
-      );
+      Alert.alert("त्रुटि (Error)", "कृपया दुकान का नाम दर्ज करें!");
       return;
     }
 
+    setIsSaving(true);
     try {
       const db = await getDB();
       const newShopId = uuidv4();
       const timestamp = new Date().toISOString();
 
-      // Write locally to SQLite first (offline safe)
       await db.runAsync(
-        "INSERT INTO shop (id, name, phone, created_at, synced) VALUES (?, ?, ?, ?, 0)",
+        `INSERT INTO shop (id, name, phone, address, active, created_at, synced) 
+         VALUES (?, ?, ?, null, 1, ?, 0)`,
         [newShopId, shopName.trim(), phone.trim() || null, timestamp],
       );
 
-      // Auto-select the newly registered shop into active state memory
-      selectShop(newShopId, shopName.trim());
-
-      // Drop driver directly into the cart-building grid matrix
-      router.push("/(driver)/billing");
+      Alert.alert("सफलता (Success)", "नई दुकान सफलतापूर्वक जोड़ दी गई है!", [
+        { text: "ठीक है (OK)", onPress: () => router.back() },
+      ]);
     } catch (error) {
-      console.error("Failed to create new shop entry:", error);
-      Alert.alert("Error", "Failed to save new shop. Please try again.");
+      console.error("Failed to insert new shop layout row:", error);
+      Alert.alert("डेटाबेस एरर", "दुकान सुरक्षित नहीं की जा सकी।");
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -59,40 +56,76 @@ export default function NewShopScreen() {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       style={styles.container}
     >
-      <ScrollView contentContainerStyle={styles.scrollContainer}>
-        <Text style={styles.title}>नई दुकान की जानकारी</Text>
-        <Text style={styles.subtitle}>Enter New Shop Details</Text>
+      {/* Header Panel */}
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+          <Feather name="arrow-left" size={24} color="#111827" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>नई दुकान जोड़ें</Text>
+        <View style={{ width: 44 }} />
+      </View>
 
-        <View style={styles.formGroup}>
-          <Text style={styles.label}>दुकान का नाम (Shop Name) *</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="e.g. Verma Ji Provision Store"
-            placeholderTextColor="#9CA3AF"
-            value={shopName}
-            onChangeText={setShopName}
-          />
+      <ScrollView
+        contentContainerStyle={styles.scrollContainer}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* Form Container Card */}
+        <View style={styles.formCard}>
+          <Text style={styles.cardTitle}>दुकान की जानकारी (Shop Details)</Text>
+          <View style={styles.tableDivider} />
+
+          {/* Shop Name Input Group (Mandatory) */}
+          <View style={styles.inputGroup}>
+            <Text style={styles.inputLabel}>दुकान का नाम (Shop Name) *</Text>
+            <TextInput
+              style={styles.textInputStyle}
+              placeholder="नाम दर्ज करें..."
+              placeholderTextColor="#9CA3AF"
+              value={shopName}
+              onChangeText={setShopName}
+            />
+          </View>
+
+          {/* Phone Number Input Group (Optional) */}
+          <View style={styles.inputGroup}>
+            <Text style={styles.inputLabel}>
+              मोबाइल नंबर (Phone Number - Optional)
+            </Text>
+            <TextInput
+              style={styles.textInputStyle}
+              placeholder="10 अंकों का नंबर (यदि हो तो)..."
+              placeholderTextColor="#9CA3AF"
+              keyboardType="phone-pad"
+              maxLength={10}
+              value={phone}
+              onChangeText={setPhone}
+            />
+          </View>
         </View>
+      </ScrollView>
 
-        <View style={styles.formGroup}>
-          <Text style={styles.label}>फ़ोन नंबर (Phone Number - Optional)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="e.g. 9876543210"
-            placeholderTextColor="#9CA3AF"
-            keyboardType="phone-pad"
-            value={phone}
-            onChangeText={setPhone}
-            maxLength={10}
+      {/* FIXED FOOTER CONTROLS CONTAINER */}
+      <View style={styles.stickyFooterContainer}>
+        <TouchableOpacity
+          style={[styles.submitButton, isSaving && styles.disabledButton]}
+          disabled={isSaving}
+          activeOpacity={0.9}
+          onPress={handleCreateShop}
+        >
+          <Feather
+            name="check-square"
+            size={20}
+            color="#FFFFFF"
+            style={{ marginRight: 8 }}
           />
-        </View>
-
-        <TouchableOpacity style={styles.saveButton} onPress={handleSaveShop}>
-          <Text style={styles.saveButtonText}>
-            सहेजें और आगे बढ़ें (Save & Continue)
+          <Text style={styles.submitButtonText}>
+            {isSaving
+              ? "सुरक्षित हो रहा है..."
+              : "दुकान सुरक्षित करें (Save Shop)"}
           </Text>
         </TouchableOpacity>
-      </ScrollView>
+      </View>
     </KeyboardAvoidingView>
   );
 }
@@ -101,57 +134,101 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F3F4F6",
+    paddingTop: 44,
+  },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  backBtn: {
+    width: 44,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#111827",
   },
   scrollContainer: {
-    paddingTop: 60,
-    paddingHorizontal: 24,
-    paddingBottom: 40,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 130,
   },
-  title: {
-    fontSize: 26,
-    fontWeight: "bold",
-    color: "#1F2937",
+  formCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    elevation: 1,
   },
-  subtitle: {
-    fontSize: 14,
+  cardTitle: {
+    fontSize: 13,
+    fontWeight: "700",
     color: "#6B7280",
-    marginBottom: 32,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
-  formGroup: {
-    marginBottom: 24,
+  tableDivider: {
+    height: 1,
+    backgroundColor: "#E5E7EB",
+    marginVertical: 12,
   },
-  label: {
-    fontSize: 16,
-    fontWeight: "600",
+  inputGroup: {
+    marginBottom: 20,
+  },
+  inputLabel: {
+    fontSize: 15,
+    fontWeight: "700",
     color: "#4B5563",
     marginBottom: 8,
   },
-  input: {
-    backgroundColor: "#FFFFFF",
-    height: 56,
+  textInputStyle: {
+    backgroundColor: "#F3F4F6",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    height: 54,
     borderRadius: 12,
     paddingHorizontal: 16,
     fontSize: 18,
-    color: "#1F2937",
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
+    fontWeight: "700",
+    color: "#111827",
   },
-  saveButton: {
-    backgroundColor: "#10B981",
-    height: 60,
-    borderRadius: 14,
+  stickyFooterContainer: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "#FFFFFF",
+    borderTopWidth: 1,
+    borderColor: "#E5E7EB",
+    paddingTop: 14,
+    paddingHorizontal: 20,
+    paddingBottom: 38,
+    elevation: 16,
+  },
+  submitButton: {
+    backgroundColor: "#111827",
+    height: 56,
+    borderRadius: 16,
     justifyContent: "center",
     alignItems: "center",
-    marginTop: 16,
-    elevation: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    flexDirection: "row",
   },
-  saveButtonText: {
+  disabledButton: {
+    backgroundColor: "#9CA3AF",
+  },
+  submitButtonText: {
     color: "#FFFFFF",
-    fontSize: 18,
-    fontWeight: "bold",
+    fontSize: 17,
+    fontWeight: "800",
   },
 });

@@ -1,13 +1,15 @@
+import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
-    Alert,
-    FlatList,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  FlatList,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { getDB } from "../../src/db/local/sqlite";
 import { useAppStore } from "../../src/store/appStore";
@@ -25,8 +27,8 @@ export default function ShopPickerScreen() {
   const [shops, setShops] = useState<ShopItem[]>([]);
   const [filteredShops, setFilteredShops] = useState<ShopItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [isListening, setIsListening] = useState(false);
 
-  // Load the complete, flat register list of shops on focus
   useEffect(() => {
     async function loadShops() {
       try {
@@ -43,7 +45,6 @@ export default function ShopPickerScreen() {
     loadShops();
   }, []);
 
-  // Filter list smoothly as typing or voice transcription populates input
   const handleSearch = (text: string) => {
     setSearchQuery(text);
     if (text.trim() === "") {
@@ -57,75 +58,154 @@ export default function ShopPickerScreen() {
     }
   };
 
-  const handleVoiceInputPlaceholder = () => {
-    Alert.alert(
-      "Voice Typing",
-      "Speak the shop name now...\n\n(In production, this integrates directly with Android native Speech Recognizer API via expo-speech / react-native-voice)",
-    );
+  // REAL VOICE TYPING INTEGRATION (Web Speech API for Localhost Browser preview)
+  const handleVoiceInput = () => {
+    if (Platform.OS === "web") {
+      // Check if browser supports speech recognition
+      const SpeechRecognition =
+        (window as any).SpeechRecognition ||
+        (window as any).webkitSpeechRecognition;
+
+      if (!SpeechRecognition) {
+        Alert.alert("एरर", "आपका ब्राउज़र वॉइस टाइपिंग सपोर्ट नहीं करता है।");
+        return;
+      }
+
+      const recognition = new SpeechRecognition();
+      recognition.lang = "hi-IN"; // Set to Hindi/Indian English
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        setIsListening(true);
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error("Speech recognition error", event.error);
+        setIsListening(false);
+        Alert.alert(
+          "एरर",
+          "आवाज़ पहचानने में दिक्कत हुई। कृपया फिर से कोशिश करें।",
+        );
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognition.onresult = (event: any) => {
+        const speechToText = event.results[0][0].transcript;
+        // Remove trailing full stops that speech recognition sometimes adds
+        const cleanedText = speechToText.replace(/\.$/, "");
+        handleSearch(cleanedText);
+      };
+
+      recognition.start();
+    } else {
+      // Android Production Fallback Native Prompt Shorthand
+      Alert.alert(
+        "वॉइस सर्च",
+        "दुकान का नाम बोलें...\n\n(एंड्रॉइड फोन पर यह सीधा गूगल वॉइस सर्विस को एक्टिवेट करेगा।)",
+      );
+    }
   };
 
   const handleSelectShop = (shop: ShopItem) => {
     selectShop(shop.id, shop.name);
-    // Push directly down into the core cart-building SKU tile grid matrix
     router.push("/(driver)/billing");
   };
 
   return (
     <View style={styles.container}>
-      {/* Search Header Bar */}
-      <View style={styles.searchBarContainer}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="दुकान का नाम खोजें (Search Shop...)"
-          placeholderTextColor="#9CA3AF"
-          value={searchQuery}
-          onChangeText={handleSearch}
-        />
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+          <Feather name="arrow-left" size={24} color="#111827" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>दुकान चुनें (Select Shop)</Text>
+        <View style={{ width: 44 }} />
+      </View>
+
+      {/* Fixed Top Controls Wrapper */}
+      <View style={styles.topControlCard}>
+        {/* Search Bar Container */}
+        <View style={styles.searchBarContainer}>
+          <View style={styles.searchBox}>
+            <Feather
+              name="search"
+              size={20}
+              color="#9CA3AF"
+              style={styles.searchIcon}
+            />
+            <TextInput
+              style={styles.searchInput}
+              placeholder={
+                isListening
+                  ? "सुन रहे हैं... बोलिए..."
+                  : "दुकान का नाम खोजें..."
+              }
+              placeholderTextColor="#9CA3AF"
+              value={searchQuery}
+              onChangeText={handleSearch}
+            />
+          </View>
+          <TouchableOpacity
+            style={[styles.micButton, isListening && styles.micButtonListening]}
+            onPress={handleVoiceInput}
+          >
+            <Feather name="mic" size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+        </View>
+
+        {/* BUTTON MOVED UP: नई दुकान का बटन अब ऊपर सर्च बार के तुरंत नीचे है */}
         <TouchableOpacity
-          style={styles.micButton}
-          onPress={handleVoiceInputPlaceholder}
+          style={styles.newShopButtonTop}
+          activeOpacity={0.9}
+          onPress={() => router.push("/(driver)/new-shop")}
         >
-          <Text style={styles.micIcon}>🎙️</Text>
+          <Feather name="plus" size={20} color="#FFFFFF" />
+          <Text style={styles.newShopButtonTextTop}>
+            नई दुकान जोड़ें (Add New Shop)
+          </Text>
         </TouchableOpacity>
       </View>
 
-      {/* Flat List matching generic, plain sorting */}
+      {/* Shop List Section */}
       <FlatList
         data={filteredShops}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
         renderItem={({ item }) => (
           <TouchableOpacity
             style={styles.shopRow}
+            activeOpacity={0.7}
             onPress={() => handleSelectShop(item)}
           >
+            <View style={styles.shopIconCircle}>
+              <Feather name="shopping-bag" size={20} color="#4B5563" />
+            </View>
             <View style={styles.shopInfo}>
               <Text style={styles.shopNameText}>{item.name}</Text>
               {item.phone ? (
-                <Text style={styles.shopPhoneText}>📞 {item.phone}</Text>
+                <View style={styles.phoneRow}>
+                  <Feather name="phone" size={12} color="#6B7280" />
+                  <Text style={styles.shopPhoneText}>{item.phone}</Text>
+                </View>
               ) : null}
             </View>
-            <Text style={styles.arrowIcon}>➡️</Text>
+            <Feather name="chevron-right" size={24} color="#9CA3AF" />
           </TouchableOpacity>
         )}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
+            <Feather name="inbox" size={48} color="#D1D5DB" />
             <Text style={styles.emptyText}>
               कोई दुकान नहीं मिली (No shops found)
             </Text>
           </View>
         }
       />
-
-      {/* Persistent Full-Width New Shop Action Button */}
-      <TouchableOpacity
-        style={styles.newShopButton}
-        onPress={() => router.push("/(driver)/new-shop")}
-      >
-        <Text style={styles.newShopButtonText}>
-          ➕ नई दुकान जोड़ें (Add New Shop)
-        </Text>
-      </TouchableOpacity>
     </View>
   );
 }
@@ -136,49 +216,100 @@ const styles = StyleSheet.create({
     backgroundColor: "#F3F4F6",
     paddingTop: 50,
   },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  backBtn: {
+    width: 44,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#111827",
+  },
+  topControlCard: {
+    backgroundColor: "#FFFFFF",
+    paddingBottom: 16,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    paddingHorizontal: 20,
+  },
   searchBarContainer: {
     flexDirection: "row",
+    paddingTop: 16,
+    gap: 12,
+  },
+  searchBox: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F3F4F6",
+    height: 56,
+    borderRadius: 16,
     paddingHorizontal: 16,
-    marginBottom: 16,
-    gap: 10,
+  },
+  searchIcon: {
+    marginRight: 10,
   },
   searchInput: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
-    height: 56,
-    borderRadius: 14,
-    paddingHorizontal: 18,
-    fontSize: 18,
-    color: "#1F2937",
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    elevation: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
+    fontSize: 16,
+    color: "#111827",
+    fontWeight: "600",
   },
   micButton: {
     width: 56,
     height: 56,
-    backgroundColor: "#007AFF",
+    backgroundColor: "#111827",
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  micButtonListening: {
+    backgroundColor: "#DC2626", // Flashes Red when listening to voice
+  },
+  newShopButtonTop: {
+    flexDirection: "row",
+    backgroundColor: "#111827",
+    height: 48,
     borderRadius: 14,
     justifyContent: "center",
     alignItems: "center",
-    elevation: 2,
+    marginTop: 14,
+    gap: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
   },
-  micIcon: {
-    fontSize: 22,
+  newShopButtonTextTop: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "700",
   },
   listContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 90, // Margin buffer so content clears persistent bottom button
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 40,
   },
   shopRow: {
     backgroundColor: "#FFFFFF",
-    paddingVertical: 18,
-    paddingHorizontal: 20,
-    borderRadius: 14,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    borderRadius: 16,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
@@ -186,50 +317,42 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#E5E7EB",
   },
+  shopIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#F3F4F6",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 16,
+  },
   shopInfo: {
     flex: 1,
   },
   shopNameText: {
-    fontSize: 20,
-    fontWeight: "600",
-    color: "#1F2937",
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  phoneRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 6,
+    gap: 6,
   },
   shopPhoneText: {
     fontSize: 14,
-    color: "#6B21A8",
-    marginTop: 4,
-  },
-  arrowIcon: {
-    fontSize: 18,
-    color: "#9CA3AF",
+    color: "#6B7280",
+    fontWeight: "500",
   },
   emptyContainer: {
     alignItems: "center",
-    marginTop: 40,
+    marginTop: 60,
   },
   emptyText: {
     fontSize: 16,
     color: "#6B7280",
-  },
-  newShopButton: {
-    position: "absolute",
-    bottom: 16,
-    left: 16,
-    right: 16,
-    backgroundColor: "#10B981",
-    height: 60,
-    borderRadius: 16,
-    justifyContent: "center",
-    alignItems: "center",
-    elevation: 4,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
-  newShopButtonText: {
-    color: "#FFFFFF",
-    fontSize: 20,
-    fontWeight: "bold",
+    marginTop: 16,
+    fontWeight: "500",
   },
 });

@@ -41,3 +41,30 @@ export const printEndDayReports = async (
   );
   return false;
 };
+
+export interface PrintItem {
+  name: string;
+  boxes: number;
+  price: number;
+  amount: number;
+}
+
+export interface PrintInvoiceData {
+  shopName: string;
+  date: string;
+  totalBoxes: number;
+  totalAmount: number;
+  cashPaid: number;
+  paytmPaid: number;
+  udhaar: number;
+  items: PrintItem[];
+}
+
+// नया वेब-सेफ फंक्शन
+export const printItemWiseReport = async (
+  _data: any,
+  _savedPrinterAddress: string | null,
+): Promise<boolean> => {
+  Alert.alert("Not Available on Web", "Item reports only print on Android.");
+  return false;
+};
