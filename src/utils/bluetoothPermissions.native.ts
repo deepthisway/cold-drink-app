@@ -14,7 +14,7 @@ export async function ensureBluetoothPermissions(): Promise<boolean> {
       granted["android.permission.BLUETOOTH_CONNECT"] === "granted"
     );
   } else {
-    // Android 11 and below need location permission for BT scanning
+    // Android 11 aur usse neeche ke liye location permission chahiye scanning ke liye
     const granted = await PermissionsAndroid.request(
       PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
     );

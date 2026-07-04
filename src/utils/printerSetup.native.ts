@@ -8,12 +8,14 @@ export interface PairedDevice {
 
 export async function scanPairedPrinters(): Promise<PairedDevice[]> {
   const hasPermission = await ensureBluetoothPermissions();
+  console.log("Bluetooth permission granted?", hasPermission);
   if (!hasPermission) {
     throw new Error("PERMISSION_DENIED");
   }
 
-  const { paired } = await ThermalPrinter.scanDevices();
-  return (paired || []).map((d: any) => ({
+  const result = await ThermalPrinter.scanDevices();
+  console.log("Scan result:", JSON.stringify(result));
+  return (result.paired || []).map((d: any) => ({
     name: d.name || "Unknown Device",
     address: d.address,
   }));

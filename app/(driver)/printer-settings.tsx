@@ -2,7 +2,7 @@ import {
   PairedDevice,
   scanPairedPrinters,
   testPrintConnection,
-} from "@/src/utils/printerSetup.web";
+} from "@/src/utils/printerSetup";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
@@ -11,6 +11,7 @@ import {
   FlatList,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -23,6 +24,20 @@ export default function PrinterSettingsScreen() {
   const [loading, setLoading] = useState(true);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [connectingTo, setConnectingTo] = useState<string | null>(null);
+  const [manualAddress, setManualAddress] = useState("66:32:E9:63:A3:B8");
+
+  const saveManualAddress = () => {
+    const trimmed = manualAddress.trim();
+    if (!trimmed) {
+      Alert.alert("Error", "Please enter a valid MAC address.");
+      return;
+    }
+    setPrinterAddress(trimmed);
+    Alert.alert(
+      "Saved",
+      "Printer address saved manually. Try printing a test receipt now.",
+    );
+  };
 
   useEffect(() => {
     scanDevices();
@@ -94,6 +109,34 @@ export default function PrinterSettingsScreen() {
         <TouchableOpacity style={styles.scanBtn} onPress={scanDevices}>
           <Text style={styles.scanBtnText}>🔄 Rescan Devices</Text>
         </TouchableOpacity>
+        <View
+          style={{
+            marginTop: 16,
+            borderTopWidth: 1,
+            borderTopColor: "#E5E7EB",
+            paddingTop: 16,
+          }}
+        >
+          <Text style={styles.statusTitle}>Or enter MAC address manually:</Text>
+          <TextInput
+            value={manualAddress}
+            onChangeText={setManualAddress}
+            placeholder="XX:XX:XX:XX:XX:XX"
+            autoCapitalize="characters"
+            style={{
+              borderWidth: 1,
+              borderColor: "#D1D5DB",
+              borderRadius: 8,
+              padding: 10,
+              marginTop: 8,
+              marginBottom: 8,
+              fontSize: 14,
+            }}
+          />
+          <TouchableOpacity style={styles.scanBtn} onPress={saveManualAddress}>
+            <Text style={styles.scanBtnText}>💾 Save This Address</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {loading ? (

@@ -30,3 +30,14 @@ export const printReceipt = async (
   );
   return false;
 };
+
+export const printEndDayReports = async (
+  _data: any,
+  _savedPrinterAddress: string | null,
+): Promise<boolean> => {
+  Alert.alert(
+    "Not Available on Web",
+    "End day reports only print on the Android app.",
+  );
+  return false;
+};
