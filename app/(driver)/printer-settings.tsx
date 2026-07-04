@@ -1,22 +1,20 @@
-import { ensureBluetoothPermissions } from "@/src/utils/bluetoothPermissions";
-import { ThermalPrinter } from "@finan-me/react-native-thermal-printer";
+import {
+  PairedDevice,
+  scanPairedPrinters,
+  testPrintConnection,
+} from "@/src/utils/printerSetup.web";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useAppStore } from "../../src/store/appStore";
-
-interface PairedDevice {
-  name: string;
-  address: string;
-}
 
 export default function PrinterSettingsScreen() {
   const router = useRouter();
@@ -33,26 +31,18 @@ export default function PrinterSettingsScreen() {
   const scanDevices = async () => {
     setLoading(true);
     try {
-      const hasPermission = await ensureBluetoothPermissions();
-      if (!hasPermission) {
+      const paired = await scanPairedPrinters();
+      setDevices(paired);
+    } catch (error: any) {
+      console.error("Bluetooth Scan Error:", error);
+      if (error?.message === "PERMISSION_DENIED") {
         Alert.alert(
           "Permission Needed",
           "Please allow Bluetooth permissions to scan for printers.",
         );
-        setLoading(false);
-        return;
+      } else {
+        Alert.alert("Scan Failed", "Could not scan for Bluetooth devices.");
       }
-
-      const { paired } = await ThermalPrinter.scanDevices();
-      setDevices(
-        (paired || []).map((d: any) => ({
-          name: d.name || "Unknown Device",
-          address: d.address,
-        })),
-      );
-    } catch (error) {
-      console.error("Bluetooth Scan Error:", error);
-      Alert.alert("Scan Failed", "Could not scan for Bluetooth devices.");
     } finally {
       setLoading(false);
     }
@@ -61,29 +51,9 @@ export default function PrinterSettingsScreen() {
   const connectAndTestPrinter = async (device: PairedDevice) => {
     setConnectingTo(device.address);
     try {
-      const address = device.address.startsWith("bt:")
-        ? device.address
-        : `bt:${device.address}`;
+      const success = await testPrintConnection(device.address);
 
-      const job = {
-        printers: [{ address, options: { paperWidthMm: 58, marginMm: 1 } }],
-        documents: [
-          [
-            { type: "text", content: "--------------------------------" },
-            {
-              type: "text",
-              content: "PRINTER CONNECTED SUCCESSFULLY!",
-              style: { align: "center", bold: true },
-            },
-            { type: "text", content: "--------------------------------" },
-            { type: "feed", lines: 2 },
-          ],
-        ],
-      };
-
-      const result = await ThermalPrinter.printReceipt(job);
-
-      if (result?.success) {
+      if (success) {
         setPrinterAddress(device.address);
         Alert.alert(
           "Success!",

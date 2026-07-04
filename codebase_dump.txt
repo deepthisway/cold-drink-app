@@ -4,29 +4,34 @@ import { Stack } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { getDB } from "../src/db/local/sqlite";
+import { useAppStore } from "../src/store/appStore";
+import { getOrCreateDeviceId } from "../src/utils/deviceId";
 
 export default function RootLayout() {
   const [dbInitialized, setDbInitialized] = useState(false);
+  const setDeviceId = useAppStore((state) => state.setDeviceId);
 
   useEffect(() => {
-    async function prepareDatabase() {
+    async function prepareApp() {
       try {
+        console.log("Hydrating persisted device ID...");
+        const id = await getOrCreateDeviceId();
+        setDeviceId(id);
+
         console.log("Opening local SQLite instance...");
         await getDB();
 
-        // Pull the live products and shops straight from your Supabase dashboard insert
         await syncDatabaseWithCloud();
 
         setDbInitialized(true);
       } catch (error) {
-        console.error("Failed to initialize local SQLite layer:", error);
+        console.error("Failed to initialize app:", error);
       }
     }
 
-    prepareDatabase();
+    prepareApp();
   }, []);
 
-  // Show a clean loading state while SQLite initializes tables on the first cold launch
   if (!dbInitialized) {
     return (
       <View style={styles.loadingContainer}>
@@ -37,10 +42,7 @@ export default function RootLayout() {
 
   return (
     <Stack screenOptions={{ headerShown: false }}>
-      {/* Driver screens routing group */}
       <Stack.Screen name="(driver)" options={{ headerShown: false }} />
-
-      {/* Admin screens routing group */}
       <Stack.Screen name="(admin)" options={{ headerShown: false }} />
     </Stack>
   );
@@ -894,6 +896,7 @@ const styles = StyleSheet.create({
 
 
 === FILE: ./app/(driver)/invoice-detail.tsx ===
+import { useAppStore } from "@/src/store/appStore";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
@@ -937,6 +940,7 @@ export default function InvoiceDetailScreen() {
   const [invoice, setInvoice] = useState<InvoiceDetail | null>(null);
   const [items, setItems] = useState<InvoiceItemDetail[]>([]);
   const [isActionLoading, setIsActionLoading] = useState(false);
+  const printerAddress = useAppStore((state) => state.printerAddress);
 
   useEffect(() => {
     async function loadInvoiceDetails() {
@@ -978,12 +982,32 @@ export default function InvoiceDetailScreen() {
     loadInvoiceDetails();
   }, [id]);
 
-  const handleReprint = () => {
-    // TODO: Trigger native @finan-me/react-native-thermal-printer image generation stream
-    Alert.alert(
-      "Reprinting",
-      "Sending duplicate receipt layout to MT580P thermal printer...",
+  const handleReprint = async () => {
+    if (!invoice) return;
+
+    const printSuccess = await printReceipt(
+      {
+        shopName: invoice.shop_name,
+        date: invoice.invoice_date,
+        totalBoxes: invoice.total_boxes,
+        totalAmount: invoice.total_amount,
+        cashPaid: invoice.cash_amount,
+        paytmPaid: invoice.paytm_amount,
+        udhaar: invoice.udhaar_amount,
+        items: items.map((item) => ({
+          name: item.sku_name,
+          boxes: item.boxes,
+          price: 0, // not needed for reprint layout
+          amount: item.amount,
+        })),
+      },
+      printerAddress,
     );
+
+    if (printSuccess) {
+      Alert.alert("Success", "Receipt reprinted successfully.");
+    }
+    // printReceipt already shows its own error alert on failure, no need to duplicate
   };
 
   const handleCancelInvoice = () => {
@@ -1466,6 +1490,7 @@ export default function CartPaymentScreen() {
     currentShopName,
     cart,
     deviceId,
+    printerAddress,
     resetInvoiceSession,
   } = useAppStore();
 
@@ -1496,7 +1521,6 @@ export default function CartPaymentScreen() {
   };
 
   const handlePrintAndSave = async () => {
-    // 1. INSTANT BLOCK: If already submitting, reject any further taps immediately
     if (isSubmitting) return;
 
     if (cashAmount + paytmAmount > totalAmount) {
@@ -1512,7 +1536,6 @@ export default function CartPaymentScreen() {
       return;
     }
 
-    // 2. LOCK STATE: Set loading to true immediately before entering the DB logic
     setIsSubmitting(true);
 
     try {
@@ -1521,13 +1544,33 @@ export default function CartPaymentScreen() {
       const todayStr = new Date().toISOString().split("T")[0];
       const timestamp = new Date().toISOString();
 
-      // 3. Database Writing Sequence
+      // 1. Actually attempt to print FIRST, so we know whether it succeeded
+      const printSuccess = await printReceipt(
+        {
+          shopName: currentShopName || "Unknown Shop",
+          date: todayStr,
+          totalBoxes,
+          totalAmount,
+          cashPaid: cashAmount,
+          paytmPaid: paytmAmount,
+          udhaar: udhaarAmount,
+          items: Object.values(cart).map((item) => ({
+            name: item.name,
+            boxes: item.boxes,
+            price: item.price,
+            amount: item.boxes * item.price,
+          })),
+        },
+        printerAddress,
+      );
+
+      // 2. Save invoice with the REAL printed status, not a hardcoded 1
       await db.runAsync(
         `INSERT INTO invoice (
-          id, display_number, shop_id, invoice_date, created_at, 
-          total_amount, total_boxes, cash_amount, paytm_amount, udhaar_amount, 
-          status, printed, device_id, synced
-        ) VALUES (?, null, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, ?, 0)`,
+        id, display_number, shop_id, invoice_date, created_at, 
+        total_amount, total_boxes, cash_amount, paytm_amount, udhaar_amount, 
+        status, printed, device_id, synced
+      ) VALUES (?, null, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, 0)`,
         [
           invoiceId,
           currentShopId,
@@ -1538,6 +1581,7 @@ export default function CartPaymentScreen() {
           cashAmount,
           paytmAmount,
           udhaarAmount,
+          printSuccess ? 1 : 0,
           deviceId,
         ],
       );
@@ -1554,8 +1598,8 @@ export default function CartPaymentScreen() {
 
         await db.runAsync(
           `INSERT INTO stock_ledger (
-            id, sku_id, entry_date, quantity, entry_type, invoice_id, created_at, device_id, synced
-          ) VALUES (?, ?, ?, ?, 'sale', ?, ?, ?, 0)`,
+          id, sku_id, entry_date, quantity, entry_type, invoice_id, created_at, device_id, synced
+        ) VALUES (?, ?, ?, ?, 'sale', ?, ?, ?, 0)`,
           [
             ledgerId,
             item.skuId,
@@ -1568,33 +1612,30 @@ export default function CartPaymentScreen() {
         );
       }
 
-      // TODO: Call native @finan-me/react-native-thermal-printer logic here
-
-      // 4. CLEAN RESET & ROUTING: Clear active session memory and force redirect
       resetInvoiceSession();
-      router.replace("/(driver)");
 
-      Alert.alert(
-        "Success",
-        "बिल सहेजा गया! (Invoice Saved & Printing...)",
-        [
-          {
-            text: "OK",
-            onPress: () => {
-              // Push them clean back to Home and clear navigation stack history
-              router.replace("/(driver)");
-            },
-          },
-        ],
-        { cancelable: false }, // Prevent backing out via clicking outside the alert box
-      );
+      if (!printSuccess) {
+        // Invoice is saved either way (offline-safe), but let them know printing failed
+        Alert.alert(
+          "Saved, but Printing Failed",
+          "बिल सहेजा गया लेकिन प्रिंट नहीं हुआ। आप इसे बाद में 'Old Invoices' से दोबारा प्रिंट कर सकते हैं। (Invoice saved but did not print. You can reprint it later from Old Invoices.)",
+          [{ text: "OK", onPress: () => router.replace("/(driver)") }],
+          { cancelable: false },
+        );
+      } else {
+        Alert.alert(
+          "Success",
+          "बिल सहेजा गया और प्रिंट हो गया! (Invoice Saved & Printed!)",
+          [{ text: "OK", onPress: () => router.replace("/(driver)") }],
+          { cancelable: false },
+        );
+      }
     } catch (error) {
       console.error("Failed to commit invoice records:", error);
       Alert.alert(
         "Database Error",
         "Could not compile and save invoice. Please try again.",
       );
-      // UNLOCK on error so they can try again if it actually failed to write
       setIsSubmitting(false);
     }
   };
@@ -1900,6 +1941,8 @@ const styles = StyleSheet.create({
 
 
 === FILE: ./app/(driver)/printer-settings.tsx ===
+import { ensureBluetoothPermissions } from "@/src/utils/bluetoothPermissions";
+import { ThermalPrinter } from "@finan-me/react-native-thermal-printer";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
@@ -1911,10 +1954,6 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
-import {
-    BluetoothEscposPrinter,
-    BluetoothManager,
-} from "react-native-thermal-receipt-printer-image-qr";
 import { useAppStore } from "../../src/store/appStore";
 
 interface PairedDevice {
@@ -1937,28 +1976,23 @@ export default function PrinterSettingsScreen() {
   const scanDevices = async () => {
     setLoading(true);
     try {
-      const isEnabled = await BluetoothManager.checkBluetoothEnabled();
-      if (!isEnabled) {
+      const hasPermission = await ensureBluetoothPermissions();
+      if (!hasPermission) {
         Alert.alert(
-          "Bluetooth is Off",
-          "Please turn on Bluetooth in your phone settings first.",
+          "Permission Needed",
+          "Please allow Bluetooth permissions to scan for printers.",
         );
         setLoading(false);
         return;
       }
 
-      const scanned = await BluetoothManager.enableBluetooth();
-      let pairedList: PairedDevice[] = [];
-
-      // The library returns an array of device groups. We want the paired ones.
-      if (scanned && scanned.length > 0) {
-        scanned.forEach((group: any) => {
-          if (group.paired) {
-            pairedList = [...pairedList, ...group.paired];
-          }
-        });
-      }
-      setDevices(pairedList);
+      const { paired } = await ThermalPrinter.scanDevices();
+      setDevices(
+        (paired || []).map((d: any) => ({
+          name: d.name || "Unknown Device",
+          address: d.address,
+        })),
+      );
     } catch (error) {
       console.error("Bluetooth Scan Error:", error);
       Alert.alert("Scan Failed", "Could not scan for Bluetooth devices.");
@@ -1970,35 +2004,38 @@ export default function PrinterSettingsScreen() {
   const connectAndTestPrinter = async (device: PairedDevice) => {
     setConnectingTo(device.address);
     try {
-      // Connect to the specific MAC address
-      await BluetoothManager.connect(device.address);
+      const address = device.address.startsWith("bt:")
+        ? device.address
+        : `bt:${device.address}`;
 
-      // Save it globally so the billing screen knows which one to use
-      setPrinterAddress(device.address);
+      const job = {
+        printers: [{ address, options: { paperWidthMm: 58, marginMm: 1 } }],
+        documents: [
+          [
+            { type: "text", content: "--------------------------------" },
+            {
+              type: "text",
+              content: "PRINTER CONNECTED SUCCESSFULLY!",
+              style: { align: "center", bold: true },
+            },
+            { type: "text", content: "--------------------------------" },
+            { type: "feed", lines: 2 },
+          ],
+        ],
+      };
 
-      // Print a small test strip
-      await BluetoothEscposPrinter.printerAlign(
-        BluetoothEscposPrinter.ALIGN.CENTER,
-      );
-      await BluetoothEscposPrinter.printText(
-        "--------------------------------\n\r",
-        {},
-      );
-      await BluetoothEscposPrinter.printText(
-        "PRINTER CONNECTED SUCCESSFULLY!\n\r",
-        {},
-      );
-      await BluetoothEscposPrinter.printText(
-        "--------------------------------\n\r",
-        {},
-      );
-      await BluetoothEscposPrinter.printText("\n\r\n\r", {});
+      const result = await ThermalPrinter.printReceipt(job);
 
-      Alert.alert(
-        "Success!",
-        `Connected to ${device.name} and saved as default printer.`,
-      );
-    } catch (error) {
+      if (result?.success) {
+        setPrinterAddress(device.address);
+        Alert.alert(
+          "Success!",
+          `Connected to ${device.name} and saved as default printer.`,
+        );
+      } else {
+        throw new Error("Print job did not succeed");
+      }
+    } catch (error: any) {
       console.error("Printer Connection Error:", error);
       Alert.alert(
         "Connection Failed",
@@ -2387,16 +2424,15 @@ export default function BillingGridScreen() {
         // Aggregates matching load rows minus sales across the cumulative daily ledger logs
         const rows = await db.getAllAsync<SKURow>(
           `
-          SELECT 
+        SELECT 
             s.id, s.name, s.brand, s.size, s.price, s.image_path,
             COALESCE(SUM(l.quantity), 0) as remaining_stock
-          FROM sku s
-          LEFT JOIN stock_ledger l ON s.id = l.sku_id AND l.entry_date = ?
-          WHERE s.active = 1
-          GROUP BY s.id
-          ORDER BY s.brand ASC, s.name ASC
+        FROM sku s
+        LEFT JOIN stock_ledger l ON s.id = l.sku_id
+        WHERE s.active = 1
+        GROUP BY s.id
+        ORDER BY s.brand ASC, s.name ASC
         `,
-          [todayStr],
         );
 
         setSkus(rows);
@@ -2785,16 +2821,15 @@ export default function RemainingStockReportScreen() {
         // This query sums up all loads, subtracts all sales, and adds back cancellations for today
         const rows = await db.getAllAsync<StockReportItem>(
           `
-          SELECT 
-            s.id, s.name, s.brand, s.size,
-            COALESCE(SUM(l.quantity), 0) as expected_stock
-          FROM sku s
-          LEFT JOIN stock_ledger l ON s.id = l.sku_id AND l.entry_date = ?
-          WHERE s.active = 1
-          GROUP BY s.id
-          ORDER BY s.brand ASC, s.name ASC
-        `,
-          [todayStr],
+            SELECT 
+                s.id, s.name, s.brand, s.size,
+                COALESCE(SUM(l.quantity), 0) as expected_stock
+            FROM sku s
+            LEFT JOIN stock_ledger l ON s.id = l.sku_id
+            WHERE s.active = 1
+            GROUP BY s.id
+            ORDER BY s.brand ASC, s.name ASC
+            `,
         );
 
         setReportData(rows);
@@ -4450,6 +4485,12 @@ const styles = StyleSheet.create({
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "6911734f-f1fb-4246-a008-e8cfb8645eae"
+      }
     }
   }
 }
@@ -4694,9 +4735,11 @@ export function useClientOnlyValue<S, C>(server: S, client: C): S | C {
     "@supabase/supabase-js": "^2.110.0",
     "expo": "~57.0.1",
     "expo-constants": "~57.0.2",
+    "expo-dev-client": "~57.0.4",
     "expo-font": "~57.0.0",
     "expo-linking": "~57.0.1",
     "expo-router": "~57.0.2",
+    "expo-secure-store": "~57.0.0",
     "expo-splash-screen": "~57.0.1",
     "expo-sqlite": "~57.0.0",
     "expo-status-bar": "~57.0.0",
@@ -4706,11 +4749,9 @@ export function useClientOnlyValue<S, C>(server: S, client: C): S | C {
     "react-dom": "19.2.3",
     "react-native": "0.86.0",
     "react-native-get-random-values": "^2.0.0",
-    "react-native-ping": "^1.2.8",
     "react-native-reanimated": "4.5.0",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "4.25.2",
-    "react-native-thermal-receipt-printer-image-qr": "^0.1.12",
     "react-native-url-polyfill": "^3.0.0",
     "react-native-view-shot": "5.1.0",
     "react-native-web": "~0.21.0",
@@ -4735,11 +4776,9 @@ export function useClientOnlyValue<S, C>(server: S, client: C): S | C {
 
 
 === FILE: ./src/utils/printer.ts ===
+import { ThermalPrinter } from "@finan-me/react-native-thermal-printer";
 import { Alert } from "react-native";
-import {
-    BluetoothEscposPrinter,
-    BluetoothManager,
-} from "react-native-thermal-receipt-printer-image-qr";
+import { ensureBluetoothPermissions } from "./bluetoothPermissions";
 
 export interface PrintItem {
   name: string;
@@ -4759,153 +4798,172 @@ export interface PrintInvoiceData {
   items: PrintItem[];
 }
 
-export const printReceipt = async (invoice: PrintInvoiceData) => {
+// Address must be in "bt:AA:BB:CC:DD:EE:FF" format for this library
+function toBtAddress(macAddress: string): string {
+  return macAddress.startsWith("bt:") ? macAddress : `bt:${macAddress}`;
+}
+
+export const printReceipt = async (
+  invoice: PrintInvoiceData,
+  savedPrinterAddress: string | null,
+): Promise<boolean> => {
   try {
-    // 1. Check if Bluetooth is enabled
-    const isEnabled = await BluetoothManager.checkBluetoothEnabled();
-    if (!isEnabled) {
+    const hasPermission = await ensureBluetoothPermissions();
+    if (!hasPermission) {
       Alert.alert(
-        "Bluetooth Off",
-        "Please turn on Bluetooth to print the receipt.",
+        "Permission Needed",
+        "Bluetooth permission is required to print. Please allow it and try again.",
       );
       return false;
     }
 
-    // 2. Connect to the paired printer (Finds the first connected POS printer)
-    const devices = await BluetoothManager.enableBluetooth();
-    const pairedDevices = devices.reduce((acc: any[], deviceGroup: any) => {
-      // Library returns grouped devices, we extract the paired ones
-      if (deviceGroup && deviceGroup.paired) {
-        return acc.concat(deviceGroup.paired || []);
+    let targetAddress = savedPrinterAddress;
+
+    // If no saved printer, scan and grab the first paired device
+    if (!targetAddress) {
+      const { paired } = await ThermalPrinter.scanDevices();
+      if (!paired || paired.length === 0) {
+        Alert.alert(
+          "No Printer",
+          "No paired Bluetooth printer found. Please set up your printer first.",
+        );
+        return false;
       }
-      return acc;
-    }, []);
-
-    if (pairedDevices.length === 0) {
-      Alert.alert(
-        "No Printer",
-        "No paired Bluetooth printer found. Please pair it in Android settings first.",
-      );
-      return false;
+      targetAddress = paired[0].address;
     }
 
-    // Connect to the first paired device (assuming it's your MT580P)
-    const printerAddress = pairedDevices[0].address;
-    await BluetoothManager.connect(printerAddress);
+    const documentBody: any[] = [
+      {
+        type: "text",
+        content: "SHARMA COLD DRINKS",
+        style: { align: "center", bold: true, size: "double" },
+      },
+      {
+        type: "text",
+        content: "Wholesale Distributor",
+        style: { align: "center" },
+      },
+      { type: "line" },
+      { type: "text", content: `Shop: ${invoice.shopName}` },
+      { type: "text", content: `Date: ${invoice.date}` },
+      { type: "line" },
+      {
+        type: "table",
+        headers: ["Item", "Qty", "Amount"],
+        rows: invoice.items.map((item) => [
+          item.name.substring(0, 14),
+          `${item.boxes}`,
+          `${item.amount}`,
+        ]),
+        columnWidths: [16, 6, 10],
+        alignments: ["left", "center", "right"],
+      },
+      { type: "line" },
+      {
+        type: "text",
+        content: `Total Boxes: ${invoice.totalBoxes}`,
+        style: { align: "right" },
+      },
+      {
+        type: "text",
+        content: `GRAND TOTAL: Rs ${invoice.totalAmount}`,
+        style: { align: "right", bold: true, size: "double_width" },
+      },
+      { type: "line" },
+      { type: "text", content: `Cash Paid: Rs ${invoice.cashPaid}` },
+    ];
 
-    // 3. Start Formatting the 58mm Receipt
-    await BluetoothEscposPrinter.printerAlign(
-      BluetoothEscposPrinter.ALIGN.CENTER,
-    );
-    await BluetoothEscposPrinter.printText(
-      "--------------------------------\n\r",
-      {},
-    );
-    await BluetoothEscposPrinter.printText("SHARMA COLD DRINKS\n\r", {
-      fonttype: 1,
-      widthtimes: 1,
-      heigthtimes: 1,
-    });
-    await BluetoothEscposPrinter.printText("Wholesale Distributor\n\r", {});
-    await BluetoothEscposPrinter.printText(
-      "--------------------------------\n\r",
-      {},
-    );
-
-    // Shop & Date Info
-    await BluetoothEscposPrinter.printerAlign(
-      BluetoothEscposPrinter.ALIGN.LEFT,
-    );
-    await BluetoothEscposPrinter.printText(`Shop: ${invoice.shopName}\n\r`, {});
-    await BluetoothEscposPrinter.printText(`Date: ${invoice.date}\n\r`, {});
-    await BluetoothEscposPrinter.printText(
-      "--------------------------------\n\r",
-      {},
-    );
-
-    // Items Header
-    await BluetoothEscposPrinter.printText(
-      "Item             Qty      Amount\n\r",
-      {},
-    );
-    await BluetoothEscposPrinter.printText(
-      "--------------------------------\n\r",
-      {},
-    );
-
-    // Items Loop
-    for (const item of invoice.items) {
-      // Simple text padding to align columns on 32-character 58mm paper
-      let name = item.name.substring(0, 14).padEnd(15, " ");
-      let qty = `${item.boxes}`.padStart(3, " ");
-      let amt = `${item.amount}`.padStart(9, " ");
-      await BluetoothEscposPrinter.printText(`${name} ${qty} ${amt}\n\r`, {});
-    }
-
-    await BluetoothEscposPrinter.printText(
-      "--------------------------------\n\r",
-      {},
-    );
-
-    // Totals
-    await BluetoothEscposPrinter.printerAlign(
-      BluetoothEscposPrinter.ALIGN.RIGHT,
-    );
-    await BluetoothEscposPrinter.printText(
-      `Total Boxes: ${invoice.totalBoxes}\n\r`,
-      {},
-    );
-    await BluetoothEscposPrinter.printText(
-      `GRAND TOTAL: Rs ${invoice.totalAmount}\n\r`,
-      { widthtimes: 1 },
-    );
-    await BluetoothEscposPrinter.printText(
-      "--------------------------------\n\r",
-      {},
-    );
-
-    // Payment Breakdown
-    await BluetoothEscposPrinter.printerAlign(
-      BluetoothEscposPrinter.ALIGN.LEFT,
-    );
-    await BluetoothEscposPrinter.printText(
-      `Cash Paid: Rs ${invoice.cashPaid}\n\r`,
-      {},
-    );
     if (invoice.paytmPaid > 0) {
-      await BluetoothEscposPrinter.printText(
-        `Paytm/Online: Rs ${invoice.paytmPaid}\n\r`,
-        {},
-      );
+      documentBody.push({
+        type: "text",
+        content: `Paytm/Online: Rs ${invoice.paytmPaid}`,
+      });
     }
     if (invoice.udhaar > 0) {
-      await BluetoothEscposPrinter.printText(
-        `UDHAAR DUE: Rs ${invoice.udhaar}\n\r`,
-        { widthtimes: 1 },
-      );
+      documentBody.push({
+        type: "text",
+        content: `UDHAAR DUE: Rs ${invoice.udhaar}`,
+        style: { bold: true },
+      });
     }
 
-    // Footer
-    await BluetoothEscposPrinter.printerAlign(
-      BluetoothEscposPrinter.ALIGN.CENTER,
+    documentBody.push(
+      { type: "line" },
+      {
+        type: "text",
+        content: "Thank You! Please Visit Again.",
+        style: { align: "center" },
+      },
+      { type: "feed", lines: 3 },
+      { type: "cut" },
     );
-    await BluetoothEscposPrinter.printText(
-      "--------------------------------\n\r",
-      {},
-    );
-    await BluetoothEscposPrinter.printText(
-      "Thank You! Please Visit Again.\n\r",
-      {},
-    );
-    await BluetoothEscposPrinter.printText("\n\r\n\r\n\r", {}); // Feed paper out
 
-    return true;
-  } catch (err) {
+    const job = {
+      printers: [
+        {
+          address: toBtAddress(targetAddress),
+          options: {
+            paperWidthMm: 58,
+            marginMm: 1,
+          },
+        },
+      ],
+      documents: [documentBody],
+    };
+
+    const result = await ThermalPrinter.printReceipt(job);
+    return result?.success ?? false;
+  } catch (err: any) {
     console.error("Printer execution failed:", err);
-    Alert.alert("Printer Error", "Failed to communicate with the printer.");
+    const message = err?.message || "Failed to communicate with the printer.";
+    const suggestion = err?.suggestion ? `\n\n${err.suggestion}` : "";
+    Alert.alert("Printer Error", `${message}${suggestion}`);
     return false;
   }
 };
+
+
+=== FILE: ./src/utils/deviceId.ts ===
+import * as SecureStore from "expo-secure-store";
+import "react-native-get-random-values";
+import { v4 as uuidv4 } from "uuid";
+
+const DEVICE_ID_KEY = "cold_drink_device_id";
+
+export async function getOrCreateDeviceId(): Promise<string> {
+  let id = await SecureStore.getItemAsync(DEVICE_ID_KEY);
+  if (!id) {
+    id = uuidv4();
+    await SecureStore.setItemAsync(DEVICE_ID_KEY, id);
+  }
+  return id;
+}
+
+
+=== FILE: ./src/utils/bluetoothPermissions.ts ===
+import { PermissionsAndroid, Platform } from "react-native";
+
+export async function ensureBluetoothPermissions(): Promise<boolean> {
+  if (Platform.OS !== "android") return true;
+
+  if (Platform.Version >= 31) {
+    // Android 12+
+    const granted = await PermissionsAndroid.requestMultiple([
+      PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+      PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+    ]);
+    return (
+      granted["android.permission.BLUETOOTH_SCAN"] === "granted" &&
+      granted["android.permission.BLUETOOTH_CONNECT"] === "granted"
+    );
+  } else {
+    // Android 11 and below need location permission for BT scanning
+    const granted = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+    );
+    return granted === PermissionsAndroid.RESULTS.GRANTED;
+  }
+}
 
 
 === FILE: ./src/db/local/sqlite.ts ===
@@ -5038,21 +5096,16 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 });
 
-/**
- * Executes a two-way synchronization between Local SQLite and Supabase Cloud.
- * Designed to be safe for offline operations and multi-device inputs.
- */
 export async function syncDatabaseWithCloud(): Promise<void> {
   console.log("Starting sync engine cycle...");
   const db = await getDB();
-  const todayStr = new Date().toISOString().split("T")[0];
 
   try {
-    // -------------------------------------------------------------
-    // PART 1: DOWNLOAD DATA FROM CLOUD (Supabase -> Local SQLite)
-    // -------------------------------------------------------------
+    // ============================================================
+    // PART 1: DOWNLOAD (Supabase -> Local SQLite)
+    // ============================================================
 
-    // 1. Fetch SKUs
+    // 1. SKUs
     const { data: cloudSkus, error: skuErr } = await supabase
       .from("sku")
       .select("*");
@@ -5065,7 +5118,8 @@ export async function syncDatabaseWithCloud(): Promise<void> {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
            ON CONFLICT(id) DO UPDATE SET
              name=excluded.name, brand=excluded.brand, size=excluded.size,
-             price=excluded.price, active=excluded.active, synced=1`,
+             price=excluded.price, active=excluded.active, synced=1
+           WHERE synced = 1`, // Don't clobber a local unsynced edit that hasn't uploaded yet
           [
             item.id,
             item.name,
@@ -5080,7 +5134,7 @@ export async function syncDatabaseWithCloud(): Promise<void> {
       }
     }
 
-    // 2. Fetch Shops
+    // 2. Shops
     const { data: cloudShops, error: shopErr } = await supabase
       .from("shop")
       .select("*");
@@ -5097,12 +5151,16 @@ export async function syncDatabaseWithCloud(): Promise<void> {
       }
     }
 
-    // 3. Fetch Stock Ledger Rows (Only download today's 'load' movements from admin)
+    // 3. Stock ledger — pull last 30 days, ALL entry types (load/sale/cancel_reversal)
+    // so both admin and driver phones have a complete picture, not just admin's loads.
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const cutoffStr = thirtyDaysAgo.toISOString().split("T")[0];
+
     const { data: cloudLedger, error: ledgerErr } = await supabase
       .from("stock_ledger")
       .select("*")
-      .eq("entry_date", todayStr)
-      .eq("entry_type", "load");
+      .gte("entry_date", cutoffStr);
     if (ledgerErr) throw ledgerErr;
 
     if (cloudLedger) {
@@ -5110,7 +5168,7 @@ export async function syncDatabaseWithCloud(): Promise<void> {
         await db.runAsync(
           `INSERT INTO stock_ledger (id, sku_id, entry_date, quantity, entry_type, invoice_id, created_at, device_id, synced)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-           ON CONFLICT(id) DO NOTHING`, // Administrative ledger logs are immutable entries
+           ON CONFLICT(id) DO NOTHING`,
           [
             entry.id,
             entry.sku_id,
@@ -5125,11 +5183,59 @@ export async function syncDatabaseWithCloud(): Promise<void> {
       }
     }
 
-    // -------------------------------------------------------------
-    // PART 2: UPLOAD OFFLINE SALES TO CLOUD (Local SQLite -> Supabase)
-    // -------------------------------------------------------------
+    // ============================================================
+    // PART 2: UPLOAD (Local SQLite -> Supabase)
+    // ============================================================
 
-    // 1. Find unsynced invoices locally
+    // 1. Upload any locally-created/edited shops
+    const unsyncedShops = await db.getAllAsync<{
+      id: string;
+      name: string;
+      phone: string | null;
+      created_at: string;
+    }>("SELECT * FROM shop WHERE synced = 0");
+
+    for (const shop of unsyncedShops) {
+      const { error } = await supabase.from("shop").upsert({
+        id: shop.id,
+        name: shop.name,
+        phone: shop.phone,
+        created_at: shop.created_at,
+      });
+      if (error) throw error;
+
+      await db.runAsync("UPDATE shop SET synced = 1 WHERE id = ?", [shop.id]);
+    }
+
+    // 2. Upload any locally-edited SKUs (price/active changes from admin)
+    const unsyncedSkus = await db.getAllAsync<{
+      id: string;
+      name: string;
+      brand: string | null;
+      size: string | null;
+      price: number;
+      image_path: string | null;
+      active: number;
+      created_at: string;
+    }>("SELECT * FROM sku WHERE synced = 0");
+
+    for (const sku of unsyncedSkus) {
+      const { error } = await supabase.from("sku").upsert({
+        id: sku.id,
+        name: sku.name,
+        brand: sku.brand,
+        size: sku.size,
+        price: sku.price,
+        image_path: sku.image_path,
+        active: sku.active === 1,
+        created_at: sku.created_at,
+      });
+      if (error) throw error;
+
+      await db.runAsync("UPDATE sku SET synced = 1 WHERE id = ?", [sku.id]);
+    }
+
+    // 3. Upload unsynced invoices + their items
     const unsyncedInvoices = await db.getAllAsync<{
       id: string;
       shop_id: string;
@@ -5146,7 +5252,6 @@ export async function syncDatabaseWithCloud(): Promise<void> {
     }>("SELECT * FROM invoice WHERE synced = 0");
 
     for (const inv of unsyncedInvoices) {
-      // Fetch matching items for this unsynced invoice
       const invItems = await db.getAllAsync<{
         id: string;
         sku_id: string;
@@ -5154,7 +5259,6 @@ export async function syncDatabaseWithCloud(): Promise<void> {
         amount: number;
       }>("SELECT * FROM invoice_item WHERE invoice_id = ?", [inv.id]);
 
-      // Push primary invoice document container row to cloud
       const { error: invPushErr } = await supabase.from("invoice").upsert({
         id: inv.id,
         shop_id: inv.shop_id,
@@ -5169,21 +5273,19 @@ export async function syncDatabaseWithCloud(): Promise<void> {
         printed: inv.printed === 1,
         device_id: inv.device_id,
       });
-
       if (invPushErr) throw invPushErr;
 
-      // Push all individual item breakdown lines belonging to this invoice
       for (const item of invItems) {
-        await supabase.from("invoice_item").upsert({
+        const { error } = await supabase.from("invoice_item").upsert({
           id: item.id,
           invoice_id: inv.id,
           sku_id: item.sku_id,
           boxes: item.boxes,
           amount: item.amount,
         });
+        if (error) throw error;
       }
 
-      // 2. Clear local unsynced marks for this invoice context
       await db.runAsync("UPDATE invoice SET synced = 1 WHERE id = ?", [inv.id]);
       await db.runAsync(
         "UPDATE invoice_item SET synced = 1 WHERE invoice_id = ?",
@@ -5191,7 +5293,7 @@ export async function syncDatabaseWithCloud(): Promise<void> {
       );
     }
 
-    // 2. Upload any local offline sale/cancel entries from the stock ledger
+    // 4. Upload ALL unsynced stock ledger entries (load, sale, cancel_reversal)
     const unsyncedLedger = await db.getAllAsync<{
       id: string;
       sku_id: string;
@@ -5201,9 +5303,7 @@ export async function syncDatabaseWithCloud(): Promise<void> {
       invoice_id: string | null;
       created_at: string;
       device_id: string;
-    }>(
-      "SELECT * FROM stock_ledger WHERE synced = 0 AND entry_type IN ('sale', 'cancel_reversal')",
-    );
+    }>("SELECT * FROM stock_ledger WHERE synced = 0");
 
     for (const leg of unsyncedLedger) {
       const { error: legPushErr } = await supabase.from("stock_ledger").upsert({
@@ -5216,7 +5316,6 @@ export async function syncDatabaseWithCloud(): Promise<void> {
         created_at: leg.created_at,
         device_id: leg.device_id,
       });
-
       if (legPushErr) throw legPushErr;
 
       await db.runAsync("UPDATE stock_ledger SET synced = 1 WHERE id = ?", [
@@ -5224,16 +5323,14 @@ export async function syncDatabaseWithCloud(): Promise<void> {
       ]);
     }
 
-    console.log("Sync processing round completed successfully!");
+    console.log("Sync round completed successfully!");
   } catch (err) {
-    console.error("Cloud Sync Engine Exception Error Intercepted:", err);
+    console.error("Cloud Sync Engine Exception:", err);
   }
 }
 
 
 === FILE: ./src/store/appStore.ts ===
-import "react-native-get-random-values";
-import { v4 as uuidv4 } from "uuid";
 import { create } from "zustand";
 
 export interface CartItem {
@@ -5246,6 +5343,7 @@ export interface CartItem {
 interface AppState {
   // Device Configuration
   deviceId: string;
+  setDeviceId: (id: string) => void;
   isAdmin: boolean;
   printerAddress: string | null;
   setPrinterAddress: (address: string) => void;
@@ -5253,7 +5351,7 @@ interface AppState {
   // Active Invoice Session State
   currentShopId: string | null;
   currentShopName: string | null;
-  cart: Record<string, CartItem>; // Key: skuId
+  cart: Record<string, CartItem>;
 
   // Sync Status Flag
   isSyncing: boolean;
@@ -5264,7 +5362,6 @@ interface AppState {
   selectShop: (id: string, name: string) => void;
   clearShopSelection: () => void;
 
-  // Cart Actions
   updateCartQuantity: (
     skuId: string,
     name: string,
@@ -5275,14 +5372,15 @@ interface AppState {
   clearCart: () => void;
   resetInvoiceSession: () => void;
 
-  // Sync Actions
   setSyncingStatus: (status: boolean) => void;
   setLastSyncedTime: (time: string) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
-  // Initialize device ID uniquely once per app session (simplifies multi-device tracing)
-  deviceId: uuidv4(),
+  // Placeholder until _layout.tsx hydrates the real persisted ID on app start
+  deviceId: "unassigned",
+  setDeviceId: (id) => set({ deviceId: id }),
+
   isAdmin: false,
   printerAddress: null,
   setPrinterAddress: (address) => set({ printerAddress: address }),
@@ -5307,7 +5405,6 @@ export const useAppStore = create<AppState>((set) => ({
 
       const updatedCart = { ...state.cart };
 
-      // Enforce lower bound (0) and upper bound (available stock in van)
       if (newBoxes <= 0) {
         delete updatedCart[skuId];
       } else if (newBoxes <= remainingStock) {
