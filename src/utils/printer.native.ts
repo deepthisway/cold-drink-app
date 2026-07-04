@@ -47,6 +47,7 @@ export interface EndDayReportData {
   paytmList: EndDayPaymentRow[];
   totalUdhaar: number;
   totalPaytm: number;
+  totalCash: number;
 }
 
 function toBtAddress(macAddress: string): string {
@@ -171,6 +172,20 @@ export const printReceipt = async (
   }
 };
 
+/**
+ * Single, consolidated end-of-day report.
+ * Prints ONE receipt with exactly:
+ *  - total boxes sold
+ *  - total bill amount
+ *  - total paytm
+ *  - total udhaar
+ *  - total cash in hand (derived: totalAmount - totalUdhaar - totalPaytm)
+ *  - clean list of who owes udhaar, and how much
+ *  - clean list of who paid online (paytm), and how much
+ *
+ * Caller is responsible for marking invoices "settled" only after this
+ * returns true, and for blocking a second call for the same date.
+ */
 export const printEndDayReports = async (
   data: EndDayReportData,
   savedPrinterAddress: string | null,
@@ -195,111 +210,86 @@ export const printEndDayReports = async (
       targetAddress = paired[0].address;
     }
 
-    // ---- Document 1: Invoice-wise report ----
-    const invoiceDoc: any[] = [
+    const summaryDoc: any[] = [
       {
         type: "text",
-        content: "DAILY INVOICE REPORT",
+        content: "DAY END REPORT",
         style: { align: "center", bold: true, size: "double" },
       },
       { type: "text", content: data.date, style: { align: "center" } },
       { type: "line" },
       {
-        type: "table",
-        headers: ["Shop", "Box", "Amt"],
-        rows: data.invoices.map((inv) => [
-          inv.cancelled ? `${inv.displayLabel} (CANC)` : inv.displayLabel,
-          inv.cancelled ? "-" : `${inv.boxes}`,
-          inv.cancelled ? "CANC" : `${inv.amount}`,
-        ]),
-        columnWidths: [20, 6, 10],
-        alignments: ["left", "center", "right"],
+        type: "text",
+        content: `Total Boxes Sold: ${data.totalBoxes}`,
+        style: { bold: true },
+      },
+      {
+        type: "text",
+        content: `Total Bill Amount: Rs ${data.totalAmount}`,
+        style: { bold: true },
       },
       { type: "line" },
+      { type: "text", content: `Total Paytm: Rs ${data.totalPaytm}` },
+      { type: "text", content: `Total Udhaar: Rs ${data.totalUdhaar}` },
       {
         type: "text",
-        content: `TOTAL BILLS: ${data.invoices.filter((i) => !i.cancelled).length}`,
-        style: { bold: true },
+        content: `Total Cash In Hand: Rs ${data.totalCash}`,
+        style: { bold: true, size: "double_width" },
       },
-      {
-        type: "text",
-        content: `TOTAL AMOUNT: Rs ${data.totalAmount}`,
-        style: { bold: true },
-      },
-      {
-        type: "text",
-        content: `TOTAL BOXES: ${data.totalBoxes}`,
-        style: { bold: true },
-      },
-      { type: "feed", lines: 3 },
-      { type: "cut" },
+      { type: "line" },
     ];
 
-    // ---- Document 2: SKU-wise item report ----
-    const itemDoc: any[] = [
-      {
+    // ---- Udhaar list ----
+    summaryDoc.push({
+      type: "text",
+      content: "UDHAAR LIST",
+      style: { bold: true, align: "center" },
+    });
+    if (data.udhaarList.length === 0) {
+      summaryDoc.push({
         type: "text",
-        content: "DAILY ITEM REPORT",
-        style: { align: "center", bold: true, size: "double" },
-      },
-      { type: "text", content: data.date, style: { align: "center" } },
-      { type: "line" },
-      {
+        content: "-- No Udhaar Today --",
+        style: { align: "center" },
+      });
+    } else {
+      summaryDoc.push({
         type: "table",
-        headers: ["Item", "Box"],
-        rows: data.skuTotals.map((s) => [s.name, `${s.boxes}`]),
-        columnWidths: [26, 10],
+        headers: ["Shop", "Amount"],
+        rows: data.udhaarList.map((u) => [u.shopName, `${u.amount}`]),
+        columnWidths: [24, 12],
         alignments: ["left", "right"],
-      },
-      { type: "line" },
-      {
-        type: "text",
-        content: `TOTAL BOXES: ${data.totalBoxes}`,
-        style: { bold: true },
-      },
-      { type: "feed", lines: 3 },
-      { type: "cut" },
-    ];
+      });
+    }
 
-    // ---- Document 3: Payments report ----
-    const paymentDoc: any[] = [
-      {
+    summaryDoc.push({ type: "line" });
+
+    // ---- Paytm list ----
+    summaryDoc.push({
+      type: "text",
+      content: "PAYTM LIST",
+      style: { bold: true, align: "center" },
+    });
+    if (data.paytmList.length === 0) {
+      summaryDoc.push({
         type: "text",
-        content: "DAILY PAYMENT REPORT",
-        style: { align: "center", bold: true, size: "double" },
-      },
-      { type: "text", content: data.date, style: { align: "center" } },
+        content: "-- No Online Payment Today --",
+        style: { align: "center" },
+      });
+    } else {
+      summaryDoc.push({
+        type: "table",
+        headers: ["Shop", "Amount"],
+        rows: data.paytmList.map((p) => [p.shopName, `${p.amount}`]),
+        columnWidths: [24, 12],
+        alignments: ["left", "right"],
+      });
+    }
+
+    summaryDoc.push(
       { type: "line" },
-      { type: "text", content: "UDHAAR", style: { bold: true } },
-      ...data.udhaarList.map((u) => ({
-        type: "table" as const,
-        headers: [],
-        rows: [[u.shopName, `${u.amount}`]],
-        columnWidths: [26, 10],
-        alignments: ["left" as const, "right" as const],
-      })),
-      {
-        type: "text",
-        content: `TOTAL UDHAAR: Rs ${data.totalUdhaar}`,
-        style: { bold: true },
-      },
-      { type: "line" },
-      { type: "text", content: "PAYTM", style: { bold: true } },
-      ...data.paytmList.map((p) => ({
-        type: "table" as const,
-        headers: [],
-        rows: [[p.shopName, `${p.amount}`]],
-        columnWidths: [26, 10],
-        alignments: ["left" as const, "right" as const],
-      })),
-      {
-        type: "text",
-        content: `TOTAL PAYTM: Rs ${data.totalPaytm}`,
-        style: { bold: true },
-      },
       { type: "feed", lines: 3 },
       { type: "cut" },
-    ];
+    );
 
     const job = {
       printers: [
@@ -308,7 +298,7 @@ export const printEndDayReports = async (
           options: { paperWidthMm: 58, marginMm: 1 },
         },
       ],
-      documents: [invoiceDoc, itemDoc, paymentDoc], // teeno ek ke baad ek print honge
+      documents: [summaryDoc], // ek hi report print hogi
     };
 
     const result = await ThermalPrinter.printReceipt(job);
@@ -317,13 +307,11 @@ export const printEndDayReports = async (
     console.error("End day print failed:", err);
     Alert.alert(
       "Printer Error",
-      err?.message || "Failed to print end day reports.",
+      err?.message || "Failed to print end day report.",
     );
     return false;
   }
 };
-
-// ... (ऊपर का पुराना कोड वैसे ही रहने दें) ...
 
 export const printItemWiseReport = async (
   data: EndDayReportData,
@@ -349,7 +337,6 @@ export const printItemWiseReport = async (
       targetAddress = paired[0].address;
     }
 
-    // ---- Document: सिर्फ आइटम और बॉक्स रिपोर्ट ----
     const itemDoc: any[] = [
       {
         type: "text",
@@ -382,7 +369,7 @@ export const printItemWiseReport = async (
           options: { paperWidthMm: 58, marginMm: 1 },
         },
       ],
-      documents: [itemDoc], // सिर्फ आइटम वाला डॉक्यूमेंट भेज रहे हैं
+      documents: [itemDoc],
     };
 
     const result = await ThermalPrinter.printReceipt(job);

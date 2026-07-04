@@ -24,7 +24,10 @@ export default function DriverHomeScreen() {
   const [endDayVisible, setEndDayVisible] = useState(false);
   const [printingEndDay, setPrintingEndDay] = useState(false);
 
-  // Date Formatting (आज की तारीख)
+  // Guards against printing the end-day report twice in the same app session.
+  // Resets naturally when the app restarts / the date changes — no DB changes needed.
+  const [settledDate, setSettledDate] = useState<string | null>(null);
+
   const today = new Date();
   const formattedDate = today.toLocaleDateString("en-IN", {
     weekday: "long",
@@ -62,13 +65,38 @@ export default function DriverHomeScreen() {
     router.push("/(driver)/shop-picker");
   };
 
+  const openEndDayModal = () => {
+    const todayStr = new Date().toISOString().split("T")[0];
+
+    if (settledDate === todayStr) {
+      Alert.alert(
+        "पहले ही प्रिंट हो चुका है",
+        "आज की रिपोर्ट पहले ही प्रिंट हो चुकी है। दोबारा प्रिंट नहीं की जा सकती।",
+      );
+      return;
+    }
+
+    setEndDayVisible(true);
+  };
+
   const handleEndDayConfirm = async () => {
     setEndDayVisible(false);
+
+    const todayStr = new Date().toISOString().split("T")[0];
+
+    // Double-check right before printing too, in case the modal was left open a while.
+    if (settledDate === todayStr) {
+      Alert.alert(
+        "पहले ही प्रिंट हो चुका है",
+        "आज की रिपोर्ट पहले ही प्रिंट हो चुकी है। दोबारा प्रिंट नहीं की जा सकती।",
+      );
+      return;
+    }
+
     setPrintingEndDay(true);
 
     try {
       const db = await getDB();
-      const todayStr = new Date().toISOString().split("T")[0];
 
       const invoiceRows = await db.getAllAsync<{
         shop_name: string;
@@ -99,14 +127,6 @@ export default function DriverHomeScreen() {
         0,
       );
 
-      const skuRows = await db.getAllAsync<{ name: string; boxes: number }>(
-        `SELECT sk.name as name, SUM(ii.boxes) as boxes
-         FROM invoice_item ii JOIN invoice i ON i.id = ii.invoice_id JOIN sku sk ON sk.id = ii.sku_id
-         WHERE i.invoice_date = ? AND i.status = 'active'
-         GROUP BY sk.id ORDER BY sk.name ASC`,
-        [todayStr],
-      );
-
       const paymentRows = await db.getAllAsync<{
         shop_name: string;
         udhaar_amount: number;
@@ -127,10 +147,11 @@ export default function DriverHomeScreen() {
 
       const totalUdhaar = udhaarList.reduce((sum, r) => sum + r.amount, 0);
       const totalPaytm = paytmList.reduce((sum, r) => sum + r.amount, 0);
+      const totalCash = Math.max(0, totalAmount - totalUdhaar - totalPaytm);
 
       if (invoices.length === 0) {
         Alert.alert(
-          "कोई बिल नहीं (No Bills)",
+          "कोई बिल नहीं",
           "आज कोई बिल नहीं बना है, रिपोर्ट निकालने के लिए कुछ नहीं है।",
         );
         setPrintingEndDay(false);
@@ -143,22 +164,24 @@ export default function DriverHomeScreen() {
           invoices,
           totalAmount,
           totalBoxes,
-          skuTotals: skuRows,
+          skuTotals: [], // single report doesn't need item-wise breakdown
           udhaarList,
           paytmList,
           totalUdhaar,
           totalPaytm,
+          totalCash,
         },
         printerAddress,
       );
 
       if (success) {
-        Alert.alert("सफलता (Success)", "आज की रिपोर्ट प्रिंट हो गई है।");
+        setSettledDate(todayStr);
+        Alert.alert("सफलता", "आज की रिपोर्ट प्रिंट हो गई है।");
       }
     } catch (error) {
       console.error("End day report generation failed:", error);
       Alert.alert(
-        "एरर (Error)",
+        "एरर",
         "रिपोर्ट प्रिंट करने में समस्या आई। कृपया फिर से कोशिश करें।",
       );
     } finally {
@@ -170,10 +193,8 @@ export default function DriverHomeScreen() {
     <View style={styles.container}>
       {/* Header Area */}
       <View style={styles.header}>
-        {/* Left: Empty Spacer for Balance */}
         <View style={styles.iconPlaceholder} />
 
-        {/* Center: Brand (Long press for Admin) */}
         <TouchableOpacity
           activeOpacity={0.8}
           delayLongPress={1000}
@@ -184,11 +205,7 @@ export default function DriverHomeScreen() {
           <Text style={styles.dateText}>{formattedDate}</Text>
         </TouchableOpacity>
 
-        {/* Right: End Day Flag (Red) */}
-        <TouchableOpacity
-          style={styles.endDayBtn}
-          onPress={() => setEndDayVisible(true)}
-        >
+        <TouchableOpacity style={styles.endDayBtn} onPress={openEndDayModal}>
           <Feather name="power" size={22} color="#FFFFFF" />
         </TouchableOpacity>
       </View>
@@ -217,7 +234,6 @@ export default function DriverHomeScreen() {
             style={styles.cardIcon}
           />
           <Text style={styles.primaryCardText}>नया बिल</Text>
-          <Text style={styles.primaryCardSubText}>(New Bill)</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -232,7 +248,6 @@ export default function DriverHomeScreen() {
             style={styles.cardIcon}
           />
           <Text style={styles.secondaryCardText}>पुराने बिल</Text>
-          <Text style={styles.secondaryCardSubText}>(Old Invoices)</Text>
         </TouchableOpacity>
       </View>
 
@@ -243,17 +258,18 @@ export default function DriverHomeScreen() {
             <View style={styles.modalIconCircle}>
               <Feather name="printer" size={28} color="#DC2626" />
             </View>
-            <Text style={styles.modalTitle}>काम खत्म करें (End Day)</Text>
+            <Text style={styles.modalTitle}>काम खत्म करें</Text>
             <Text style={styles.modalMessage}>
               क्या आज का काम पूरा हो गया है? यह बटन दबाने से आज की पूरी रिपोर्ट
-              और हिसाब प्रिंट हो जाएगा। प्रिंटर चालू रखें।
+              प्रिंट हो जाएगी। यह सिर्फ़ एक बार हो सकता है, इसलिए प्रिंटर चालू
+              रखें।
             </Text>
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={[styles.btn, styles.btnCancel]}
                 onPress={() => setEndDayVisible(false)}
               >
-                <Text style={styles.btnCancelText}>रद्द करें (Cancel)</Text>
+                <Text style={styles.btnCancelText}>रद्द करें</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.btn, styles.btnConfirm]}
@@ -300,7 +316,7 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 14,
-    backgroundColor: "#DC2626", // Red background for End Day
+    backgroundColor: "#DC2626",
     justifyContent: "center",
     alignItems: "center",
     shadowColor: "#DC2626",
@@ -349,11 +365,11 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 24,
     justifyContent: "center",
-    paddingBottom: 60, // Shift slightly up for optical centering
+    paddingBottom: 60,
     gap: 24,
   },
   bigCard: {
-    height: 160, // Fixed height to make them chunky and easy to tap
+    height: 160,
     borderRadius: 24,
     justifyContent: "center",
     alignItems: "center",
@@ -364,7 +380,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   primaryCard: {
-    backgroundColor: "#111827", // Black/Dark slate
+    backgroundColor: "#111827",
   },
   secondaryCard: {
     backgroundColor: "#FFFFFF",
@@ -379,20 +395,10 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: "#FFFFFF",
   },
-  primaryCardSubText: {
-    fontSize: 14,
-    color: "#9CA3AF",
-    marginTop: 4,
-  },
   secondaryCardText: {
     fontSize: 26,
     fontWeight: "bold",
     color: "#111827",
-  },
-  secondaryCardSubText: {
-    fontSize: 14,
-    color: "#6B7280",
-    marginTop: 4,
   },
   modalOverlay: {
     flex: 1,
@@ -410,7 +416,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: "#FEE2E2", // Light red bg for icon
+    backgroundColor: "#FEE2E2",
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 20,
@@ -448,7 +454,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   btnConfirm: {
-    backgroundColor: "#DC2626", // Red confirm button
+    backgroundColor: "#DC2626",
   },
   btnConfirmText: {
     color: "#FFFFFF",
