@@ -61,7 +61,7 @@ export default function OldInvoicesScreen() {
   }
 
   const handleReprint = async (invoice: InvoiceLog) => {
-    if (reprintingId) return;
+    if (reprintingId || invoice.status === "cancelled") return;
     setReprintingId(invoice.id);
 
     try {
@@ -129,87 +129,147 @@ export default function OldInvoicesScreen() {
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContainer}
         showsVerticalScrollIndicator={false}
-        renderItem={({ item }) => (
-          /* FIX: Wrap the whole card in a pressable layout targeting dynamic segments */
-          <TouchableOpacity
-            style={styles.invoiceCard}
-            activeOpacity={0.7}
-            onPress={() =>
-              router.push({
-                pathname: "/(driver)/invoice-detail",
-                params: { id: item.id },
-              })
-            }
-          >
-            {/* Top row description */}
-            <View style={styles.cardHeader}>
-              <View style={{ flex: 1, paddingRight: 8 }}>
-                <Text style={styles.shopNameText} numberOfLines={1}>
-                  {item.shop_name}
-                </Text>
-                <Text style={styles.summarySubText}>
-                  कुल सामान:{" "}
-                  <Text style={styles.boldLabel}>{item.total_boxes} पेटी</Text>
-                </Text>
-              </View>
+        renderItem={({ item }) => {
+          const isCancelled = item.status === "cancelled";
 
-              {/* Reprint Action stays safely insulated */}
-              <TouchableOpacity
-                style={styles.reprintBtn}
-                activeOpacity={0.6}
-                onPress={() => handleReprint(item)}
-                disabled={reprintingId !== null}
-              >
-                {reprintingId === item.id ? (
-                  <ActivityIndicator size="small" color="#111827" />
-                ) : (
-                  <>
-                    <Feather name="printer" size={16} color="#111827" />
-                    <Text style={styles.reprintBtnText}>प्रिंट</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
+          return (
+            <TouchableOpacity
+              style={[
+                styles.invoiceCard,
+                isCancelled && styles.invoiceCardCancelled,
+              ]}
+              activeOpacity={0.7}
+              onPress={() =>
+                router.push({
+                  pathname: "/(driver)/invoice-detail",
+                  params: { id: item.id },
+                })
+              }
+            >
+              {/* Top row description */}
+              <View style={styles.cardHeader}>
+                <View style={{ flex: 1, paddingRight: 8 }}>
+                  <View style={styles.shopTitleRow}>
+                    <Text
+                      style={[
+                        styles.shopNameText,
+                        isCancelled && styles.textMutedStrike,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {item.shop_name}
+                    </Text>
+                    {isCancelled && (
+                      <View style={styles.cancelledBadge}>
+                        <Text style={styles.cancelledBadgeText}>रद्द</Text>
+                      </View>
+                    )}
+                  </View>
 
-            <View style={styles.divider} />
+                  <Text style={styles.summarySubText}>
+                    कुल सामान:{" "}
+                    <Text
+                      style={[
+                        styles.boldLabel,
+                        isCancelled && styles.textMuted,
+                      ]}
+                    >
+                      {item.total_boxes} पेटी
+                    </Text>
+                  </Text>
+                </View>
 
-            {/* Structured Split Payments Summary Row */}
-            <View style={styles.paymentsRow}>
-              <View style={styles.paymentMetric}>
-                <Text style={styles.metricLabel}>कुल बिल</Text>
-                <Text style={styles.metricValue}>₹{item.total_amount}</Text>
-              </View>
-
-              <View style={[styles.paymentMetric, styles.metricBorderLeft]}>
-                <Text style={styles.metricLabel}>नकद (Cash)</Text>
-                <Text style={[styles.metricValue, { color: "#374151" }]}>
-                  ₹{item.cash_amount}
-                </Text>
-              </View>
-
-              <View style={[styles.paymentMetric, styles.metricBorderLeft]}>
-                <Text style={styles.metricLabel}>Paytm</Text>
-                <Text style={[styles.metricValue, { color: "#2563EB" }]}>
-                  ₹{item.paytm_amount}
-                </Text>
-              </View>
-
-              <View style={[styles.paymentMetric, styles.metricBorderLeft]}>
-                <Text style={styles.metricLabel}>उधार</Text>
-                <Text
+                {/* Reprint Action Button Section */}
+                <TouchableOpacity
                   style={[
-                    styles.metricValue,
-                    item.udhaar_amount > 0
-                      ? styles.alertText
-                      : { color: "#10B981" },
+                    styles.reprintBtn,
+                    isCancelled && styles.reprintBtnDisabled,
                   ]}
+                  activeOpacity={0.6}
+                  onPress={() => handleReprint(item)}
+                  disabled={reprintingId !== null || isCancelled}
                 >
-                  ₹{item.udhaar_amount}
-                </Text>
+                  {reprintingId === item.id ? (
+                    <ActivityIndicator size="small" color="#111827" />
+                  ) : (
+                    <>
+                      <Feather
+                        name={isCancelled ? "slash" : "printer"}
+                        size={16}
+                        color={isCancelled ? "#9CA3AF" : "#111827"}
+                      />
+                      <Text
+                        style={[
+                          styles.reprintBtnText,
+                          isCancelled && styles.textMuted,
+                        ]}
+                      >
+                        प्रिंट
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
               </View>
-            </View>
-          </TouchableOpacity>
-        )}
+
+              <View style={styles.divider} />
+
+              {/* Structured Split Payments Summary Row */}
+              <View style={styles.paymentsRow}>
+                <View style={styles.paymentMetric}>
+                  <Text style={styles.metricLabel}>कुल बिल</Text>
+                  <Text
+                    style={[
+                      styles.metricValue,
+                      isCancelled && styles.textMuted,
+                    ]}
+                  >
+                    ₹{item.total_amount}
+                  </Text>
+                </View>
+
+                <View style={[styles.paymentMetric, styles.metricBorderLeft]}>
+                  <Text style={styles.metricLabel}>नकद (Cash)</Text>
+                  <Text
+                    style={[
+                      styles.metricValue,
+                      { color: isCancelled ? "#9CA3AF" : "#374151" },
+                    ]}
+                  >
+                    ₹{item.cash_amount}
+                  </Text>
+                </View>
+
+                <View style={[styles.paymentMetric, styles.metricBorderLeft]}>
+                  <Text style={styles.metricLabel}>Paytm</Text>
+                  <Text
+                    style={[
+                      styles.metricValue,
+                      { color: isCancelled ? "#9CA3AF" : "#2563EB" },
+                    ]}
+                  >
+                    ₹{item.paytm_amount}
+                  </Text>
+                </View>
+
+                <View style={[styles.paymentMetric, styles.metricBorderLeft]}>
+                  <Text style={styles.metricLabel}>उधार</Text>
+                  <Text
+                    style={[
+                      styles.metricValue,
+                      isCancelled
+                        ? styles.textMuted
+                        : item.udhaar_amount > 0
+                          ? styles.alertText
+                          : { color: "#10B981" },
+                    ]}
+                  >
+                    ₹{item.udhaar_amount}
+                  </Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          );
+        }}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Feather name="file-text" size={48} color="#9CA3AF" />
@@ -267,15 +327,39 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     elevation: 1,
   },
+  invoiceCardCancelled: {
+    backgroundColor: "#F9FAFB",
+    borderColor: "#E5E7EB",
+  },
   cardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
   },
+  shopTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+  },
   shopNameText: {
     fontSize: 19,
     fontWeight: "800",
     color: "#111827",
+    maxWidth: "75%",
+  },
+  cancelledBadge: {
+    backgroundColor: "#FEE2E2",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#FCA5A5",
+  },
+  cancelledBadgeText: {
+    color: "#DC2626",
+    fontSize: 12,
+    fontWeight: "900",
   },
   summarySubText: {
     fontSize: 14,
@@ -287,6 +371,13 @@ const styles = StyleSheet.create({
     color: "#111827",
     fontWeight: "800",
   },
+  textMuted: {
+    color: "#9CA3AF",
+  },
+  textMutedStrike: {
+    color: "#9CA3AF",
+    textDecorationLine: "line-through",
+  },
   reprintBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -297,6 +388,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: 12,
     gap: 4,
+  },
+  reprintBtnDisabled: {
+    borderColor: "#E5E7EB",
+    backgroundColor: "#F3F4F6",
   },
   reprintBtnText: {
     color: "#111827",

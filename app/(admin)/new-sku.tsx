@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
     Alert,
     KeyboardAvoidingView,
+    Modal,
     Platform,
     ScrollView,
     StyleSheet,
@@ -17,17 +18,32 @@ import { v4 as uuidv4 } from "uuid";
 import { getDB } from "../../src/db/local/sqlite";
 import { syncDatabaseWithCloud } from "../../src/db/sync/supabase";
 
+const AVAILABLE_BRANDS = [
+  "Pepsi",
+  "Coca Cola",
+  "MC2",
+  "Non-Stop",
+  "Hell",
+  "Campa",
+  "Parle",
+];
+
 export default function NewSKUScreen() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [brand, setBrand] = useState("");
-  const [size, setSize] = useState("");
   const [price, setPrice] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
 
   const handleCreateSKU = async () => {
     if (!name.trim()) {
       Alert.alert("त्रुटि (Error)", "कृपया आइटम का नाम दर्ज करें!");
+      return;
+    }
+
+    if (!brand) {
+      Alert.alert("त्रुटि (Error)", "कृपया एक ब्रांड चुनें!");
       return;
     }
 
@@ -43,25 +59,18 @@ export default function NewSKUScreen() {
       const newSkuId = uuidv4();
       const timestamp = new Date().toISOString();
 
-      // Insert directly into local SQLite schema with synced = 0
+      // Insert directly into local SQLite schema with size as null and synced = 0
       await db.runAsync(
         `INSERT INTO sku (id, name, brand, size, price, image_path, active, created_at, synced) 
-         VALUES (?, ?, ?, ?, ?, null, 1, ?, 0)`,
-        [
-          newSkuId,
-          name.trim(),
-          brand.trim() || null,
-          size.trim() || null,
-          parsedPrice,
-          timestamp,
-        ],
+         VALUES (?, ?, ?, null, ?, null, 1, ?, 0)`,
+        [newSkuId, name.trim(), brand, parsedPrice, timestamp],
       );
 
       Alert.alert("सफलता (Success)", "नया आइटम सफलतापूर्वक जोड़ दिया गया है!", [
         { text: "ठीक है (OK)", onPress: () => router.back() },
       ]);
 
-      // Trigger background synchronization engine immediately
+      // Trigger ecosystem data sync immediately in the background
       syncDatabaseWithCloud().catch((err) =>
         console.error("Background auto-sync failed silently:", err),
       );
@@ -114,6 +123,26 @@ export default function NewSKUScreen() {
             />
           </View>
 
+          {/* Brand Selection Dropdown (Mandatory) */}
+          <View style={styles.inputGroup}>
+            <Text style={styles.inputLabel}>ब्रांड चुनें (Select Brand) *</Text>
+            <TouchableOpacity
+              style={styles.dropdownSelectorTrigger}
+              activeOpacity={0.8}
+              onPress={() => setShowDropdown(true)}
+            >
+              <Text
+                style={[
+                  styles.dropdownTriggerText,
+                  !brand && styles.placeholderColor,
+                ]}
+              >
+                {brand || "यहाँ से ब्रांड चुनें..."}
+              </Text>
+              <Feather name="chevron-down" size={20} color="#4B5563" />
+            </TouchableOpacity>
+          </View>
+
           {/* Wholesale Price (Mandatory) */}
           <View style={styles.inputGroup}>
             <Text style={styles.inputLabel}>
@@ -128,36 +157,54 @@ export default function NewSKUScreen() {
               onChangeText={setPrice}
             />
           </View>
-
-          {/* Brand (Optional) */}
-          <View style={styles.inputGroup}>
-            <Text style={styles.inputLabel}>
-              ब्रांड (Brand Name - Optional)
-            </Text>
-            <TextInput
-              style={styles.textInputStyle}
-              placeholder="उदा. Coca Cola..."
-              placeholderTextColor="#9CA3AF"
-              value={brand}
-              onChangeText={setBrand}
-            />
-          </View>
-
-          {/* Volume Size Spec (Optional) */}
-          <View style={styles.inputGroup}>
-            <Text style={styles.inputLabel}>
-              साइज/वॉल्यूम (Size Specs - Optional)
-            </Text>
-            <TextInput
-              style={styles.textInputStyle}
-              placeholder="उदा. 200ml x 24 Pcs..."
-              placeholderTextColor="#9CA3AF"
-              value={size}
-              onChangeText={setSize}
-            />
-          </View>
         </View>
       </ScrollView>
+
+      {/* DROP DOWN SELECTION MODAL LAYER */}
+      <Modal
+        visible={showDropdown}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowDropdown(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlayContainer}
+          activeOpacity={1}
+          onPress={() => setShowDropdown(false)}
+        >
+          <View style={styles.dropdownMenuCard}>
+            <Text style={styles.modalMenuTitle}>ब्रांड की सूची</Text>
+            <View style={styles.tableDivider} />
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {AVAILABLE_BRANDS.map((item) => (
+                <TouchableOpacity
+                  key={item}
+                  style={[
+                    styles.dropdownItemRow,
+                    brand === item && styles.selectedRowHighlight,
+                  ]}
+                  onPress={() => {
+                    setBrand(item);
+                    setShowDropdown(false);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.dropdownItemText,
+                      brand === item && styles.selectedTextBold,
+                    ]}
+                  >
+                    {item}
+                  </Text>
+                  {brand === item && (
+                    <Feather name="check" size={18} color="#111827" />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* FIXED FOOTER CONTROLS DRAWER */}
       <View style={styles.stickyFooterContainer}>
@@ -253,6 +300,69 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700",
     color: "#111827",
+  },
+  dropdownSelectorTrigger: {
+    backgroundColor: "#F3F4F6",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    height: 54,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  dropdownTriggerText: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  placeholderColor: {
+    color: "#9CA3AF",
+  },
+  modalOverlayContainer: {
+    flex: 1,
+    backgroundColor: "rgba(17, 24, 39, 0.4)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  dropdownMenuCard: {
+    backgroundColor: "#FFFFFF",
+    width: "100%",
+    borderRadius: 24,
+    padding: 20,
+    maxHeight: "60%",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  modalMenuTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#4B5563",
+  },
+  dropdownItemRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+  },
+  selectedRowHighlight: {
+    backgroundColor: "#F3F4F6",
+  },
+  dropdownItemText: {
+    fontSize: 18,
+    color: "#4B5563",
+    fontWeight: "600",
+  },
+  selectedTextBold: {
+    color: "#111827",
+    fontWeight: "800",
   },
   stickyFooterContainer: {
     position: "absolute",

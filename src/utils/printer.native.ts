@@ -56,7 +56,7 @@ export interface EndDayReportData {
 // Every line below is built to exactly this width so the printer NEVER has
 // to wrap text itself — the library's own word-wrap was the root cause of
 // the broken/garbled receipts.
-const LINE_WIDTH = 24;
+const LINE_WIDTH = 30;
 
 function toBtAddress(macAddress: string): string {
   return macAddress.startsWith("bt:") ? macAddress : `bt:${macAddress}`;
