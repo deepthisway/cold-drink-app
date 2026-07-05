@@ -43,7 +43,13 @@ export default function RootLayout() {
         setDeviceId(id);
 
         console.log("Opening local SQLite instance...");
-        await getDB();
+        const db = await getDB();
+        //  TEMPORARY DEVELOPER WIPE: Un-comment these lines, save, let the app reload ONCE to clear the old bills, then comment them back out!
+        // await db.runAsync("DELETE FROM invoice_item;");
+        // await db.runAsync("DELETE FROM stock_ledger;");
+        // await db.runAsync("DELETE FROM invoice;");
+        // await db.runAsync("DELETE FROM sku;");
+        // console.log("Local testing bills flushed!");
 
         await runSync(); // CHANGED: was syncDatabaseWithCloud(), now uses shared runner
 
