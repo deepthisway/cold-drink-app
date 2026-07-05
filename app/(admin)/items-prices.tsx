@@ -14,6 +14,7 @@ import {
   View,
 } from "react-native";
 import { getDB } from "../../src/db/local/sqlite";
+import { syncDatabaseWithCloud } from "../../src/db/sync/supabase";
 
 interface ItemPriceRow {
   id: string;
@@ -103,6 +104,11 @@ export default function ItemsPricesScreen() {
         "सभी आइटमों के दाम और स्टेटस सफलतापूर्वक अपडेट हो गए हैं!",
         [{ text: "ठीक है", onPress: () => router.back() }],
       );
+
+      // Trigger ecosystem data sync immediately in the background
+      syncDatabaseWithCloud().catch((err) =>
+        console.error("Post-save background sync failure:", err),
+      );
     } catch (error) {
       console.error(
         "Database updates failed inside master catalog transactions:",
@@ -133,7 +139,16 @@ export default function ItemsPricesScreen() {
           <Feather name="arrow-left" size={24} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>सामान और रेट मैनेजमेंट</Text>
-        <View style={{ width: 44 }} />
+
+        {/* ADD PRODUCT BUTTON SHORTCUT */}
+        <TouchableOpacity
+          style={styles.addProductBtn}
+          onPress={() => router.push("/(admin)/new-sku")}
+          activeOpacity={0.7}
+        >
+          <Feather name="plus" size={18} color="#111827" />
+          <Text style={styles.addProductBtnText}>जोड़ें</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Main Items Listing FlatList */}
@@ -283,6 +298,24 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "800",
     color: "#111827",
+    flex: 1,
+    marginLeft: 8,
+  },
+  addProductBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F3F4F6",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  addProductBtnText: {
+    fontSize: 14,
+    fontWeight: "750",
+    color: "#111827",
+    marginLeft: 2,
   },
   center: {
     flex: 1,
@@ -292,7 +325,7 @@ const styles = StyleSheet.create({
   },
   listContainer: {
     padding: 14,
-    paddingBottom: 130, // Clearance margin runtime prevents items disappearing behind footer bar maps
+    paddingBottom: 130,
   },
   itemConfigCard: {
     backgroundColor: "#FFFFFF",
@@ -415,7 +448,7 @@ const styles = StyleSheet.create({
     borderColor: "#E5E7EB",
     paddingTop: 14,
     paddingHorizontal: 20,
-    paddingBottom: 38, // Clearance depth avoids soft keys overlay collisions completely
+    paddingBottom: 38,
     elevation: 16,
   },
   executionSubmitBtn: {

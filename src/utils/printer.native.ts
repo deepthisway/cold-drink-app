@@ -56,7 +56,7 @@ export interface EndDayReportData {
 // Every line below is built to exactly this width so the printer NEVER has
 // to wrap text itself — the library's own word-wrap was the root cause of
 // the broken/garbled receipts.
-const LINE_WIDTH = 32;
+const LINE_WIDTH = 24;
 
 function toBtAddress(macAddress: string): string {
   return macAddress.startsWith("bt:") ? macAddress : `bt:${macAddress}`;
@@ -116,15 +116,15 @@ function itemRow(
   boxes: number | string,
   amount: number | string,
 ) {
-  const nameCol = fit(name, 16);
-  const boxCol = fitRight(`${boxes}`, 6);
-  const amtCol = fitRight(`${amount}`, 10);
+  const nameCol = fit(name, 10); // was 16
+  const boxCol = fitRight(`${boxes}`, 4); // was 6
+  const amtCol = fitRight(`${amount}`, 10); // unchanged
   return textLine(`${nameCol}${boxCol}${amtCol}`);
 }
 
 function itemHeader() {
   return textLine(
-    `${fit("Item", 16)}${fitRight("Box", 6)}${fitRight("Amt", 10)}`,
+    `${fit("Item", 10)}${fitRight("Box", 4)}${fitRight("Amt", 10)}`,
   );
 }
 
@@ -296,7 +296,7 @@ export const printEndDayReports = async (
       summaryDoc.push(textLine("-- No Udhaar Today --", { align: "center" }));
     } else {
       for (const u of data.udhaarList) {
-        summaryDoc.push(textLine(row(fit(u.shopName, 20), `${u.amount}`, 32)));
+        summaryDoc.push(textLine(row(fit(u.shopName, 16), `${u.amount}`)));
       }
     }
 
@@ -311,7 +311,7 @@ export const printEndDayReports = async (
       );
     } else {
       for (const p of data.paytmList) {
-        summaryDoc.push(textLine(row(fit(p.shopName, 20), `${p.amount}`, 32)));
+        summaryDoc.push(textLine(row(fit(p.shopName, 16), `${p.amount}`)));
       }
     }
 
