@@ -26,6 +26,14 @@ export async function syncDatabaseWithCloud(): Promise<void> {
   try {
     // ============================================================
     // PART 1: DOWNLOAD (Supabase -> Local SQLite)
+    // NOTE: order matters here because of foreign keys:
+    //   shop -> invoice -> invoice_item / stock_ledger
+    // invoice.shop_id references shop(id), and both invoice_item.invoice_id
+    // and stock_ledger.invoice_id reference invoice(id). Downloading
+    // stock_ledger before invoice used to crash with
+    // "FOREIGN KEY constraint failed" whenever a ledger row referenced an
+    // invoice that hadn't been pulled down onto this device yet (e.g. admin
+    // syncing a driver's invoice for the first time).
     // ============================================================
 
     // 1. SKUs
@@ -74,12 +82,80 @@ export async function syncDatabaseWithCloud(): Promise<void> {
       }
     }
 
-    // 3. Stock ledger — pull last 30 days, ALL entry types (load/sale/cancel_reversal)
-    // so both admin and driver phones have a complete picture, not just admin's loads.
+    // 3. Invoices — pull last 30 days (matches the ledger window below).
+    // NEW: this was missing entirely before, which is why:
+    //   (a) admin's datewise sales report never showed driver invoices, and
+    //   (b) downloading stock_ledger rows that referenced these invoices
+    //       crashed with a FOREIGN KEY constraint error.
+    // Downloaded AFTER shop (FK: invoice.shop_id -> shop.id) and BEFORE
+    // invoice_item / stock_ledger (which both reference invoice.id).
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     const cutoffStr = thirtyDaysAgo.toISOString().split("T")[0];
 
+    const { data: cloudInvoices, error: invoiceErr } = await supabase
+      .from("invoice")
+      .select("*")
+      .gte("invoice_date", cutoffStr);
+    if (invoiceErr) throw invoiceErr;
+
+    if (cloudInvoices) {
+      for (const inv of cloudInvoices) {
+        await db.runAsync(
+          `INSERT INTO invoice
+             (id, display_number, shop_id, invoice_date, created_at, total_amount,
+              total_boxes, cash_amount, paytm_amount, udhaar_amount, status, printed, device_id, synced)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+           ON CONFLICT(id) DO UPDATE SET
+             status=excluded.status, total_amount=excluded.total_amount,
+             total_boxes=excluded.total_boxes, cash_amount=excluded.cash_amount,
+             paytm_amount=excluded.paytm_amount, udhaar_amount=excluded.udhaar_amount,
+             printed=excluded.printed, synced=1
+           WHERE synced = 1`, // Don't clobber a local unsynced edit (e.g. a cancel that hasn't uploaded yet)
+          [
+            inv.id,
+            inv.display_number,
+            inv.shop_id,
+            inv.invoice_date,
+            inv.created_at,
+            inv.total_amount,
+            inv.total_boxes,
+            inv.cash_amount,
+            inv.paytm_amount,
+            inv.udhaar_amount,
+            inv.status,
+            inv.printed ? 1 : 0,
+            inv.device_id,
+          ],
+        );
+      }
+    }
+
+    // 4. Invoice items — NEW, same reasoning as invoice above. Downloaded
+    // after invoice (FK: invoice_item.invoice_id -> invoice.id).
+    if (cloudInvoices && cloudInvoices.length > 0) {
+      const invoiceIds = cloudInvoices.map((inv) => inv.id);
+      const { data: cloudInvoiceItems, error: itemErr } = await supabase
+        .from("invoice_item")
+        .select("*")
+        .in("invoice_id", invoiceIds);
+      if (itemErr) throw itemErr;
+
+      if (cloudInvoiceItems) {
+        for (const item of cloudInvoiceItems) {
+          await db.runAsync(
+            `INSERT INTO invoice_item (id, invoice_id, sku_id, boxes, amount, synced)
+             VALUES (?, ?, ?, ?, ?, 1)
+             ON CONFLICT(id) DO NOTHING`,
+            [item.id, item.invoice_id, item.sku_id, item.boxes, item.amount],
+          );
+        }
+      }
+    }
+
+    // 5. Stock ledger — pull last 30 days, ALL entry types (load/sale/cancel_reversal)
+    // so both admin and driver phones have a complete picture, not just admin's loads.
+    // (Downloaded AFTER invoice, since some rows reference invoice_id.)
     const { data: cloudLedger, error: ledgerErr } = await supabase
       .from("stock_ledger")
       .select("*")
