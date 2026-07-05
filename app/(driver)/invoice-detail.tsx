@@ -10,6 +10,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import "react-native-get-random-values"; // NEW: required before uuid import on RN
+import { v4 as uuidv4 } from "uuid"; // NEW: used to generate the reversal ledger entry id
 import { getDB } from "../../src/db/local/sqlite";
 import { useAppStore } from "../../src/store/appStore";
 import { printReceipt } from "../../src/utils/printer";
@@ -27,6 +29,7 @@ interface InvoiceMetadata {
 }
 
 interface InvoiceItemBreakdown {
+  sku_id: string; // NEW: needed to write the stock_ledger reversal entry per item
   name: string;
   boxes: number;
   price: number;
@@ -37,11 +40,13 @@ export default function InvoiceDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const printerAddress = useAppStore((state) => state.printerAddress);
+  const deviceId = useAppStore((state) => state.deviceId); // NEW: stamped on the reversal ledger rows
 
   const [metadata, setMetadata] = useState<InvoiceMetadata | null>(null);
   const [items, setItems] = useState<InvoiceItemBreakdown[]>([]);
   const [loading, setLoading] = useState(true);
   const [reprinting, setReprinting] = useState(false);
+  const [cancelling, setCancelling] = useState(false); // NEW: cancel-in-progress state
 
   useEffect(() => {
     if (id) {
@@ -68,8 +73,10 @@ export default function InvoiceDetailScreen() {
       }
 
       // 2. Load accurate product item rows lines
+      // CHANGED: added ii.sku_id to the SELECT — needed to build stock_ledger
+      // reversal rows when the invoice is cancelled
       const itemRows = await db.getAllAsync<InvoiceItemBreakdown>(
-        `SELECT sk.name, ii.boxes, sk.price, ii.amount 
+        `SELECT ii.sku_id, sk.name, ii.boxes, sk.price, ii.amount 
          FROM invoice_item ii
          JOIN sku sk ON sk.id = ii.sku_id
          WHERE ii.invoice_id = ?`,
@@ -112,6 +119,76 @@ export default function InvoiceDetailScreen() {
     }
   };
 
+  // NEW: cancel invoice flow
+  // - marks the invoice as "cancelled"
+  // - writes one stock_ledger "cancel_reversal" entry per item to add the
+  //   boxes back to remaining stock
+  // - flips synced=0 on everything touched so the next sync cycle pushes
+  //   the cancellation (and the reversal) up to Supabase
+  const handleCancelInvoice = () => {
+    if (!metadata || metadata.status === "cancelled") return;
+
+    Alert.alert(
+      "बिल रद्द करें? (Cancel Invoice?)",
+      "इससे स्टॉक वापस जुड़ जाएगा। यह कार्रवाई पूर्ववत नहीं की जा सकती।",
+      [
+        { text: "नहीं (No)", style: "cancel" },
+        {
+          text: "हाँ, रद्द करें (Yes, Cancel)",
+          style: "destructive",
+          onPress: () => runCancelInvoice(metadata.id),
+        },
+      ],
+    );
+  };
+
+  const runCancelInvoice = async (invoiceId: string) => {
+    setCancelling(true);
+    try {
+      const db = await getDB();
+      const todayStr = new Date().toISOString().split("T")[0];
+      const timestamp = new Date().toISOString();
+
+      // 1. Mark the invoice cancelled and unsynced so it re-uploads
+      await db.runAsync(
+        `UPDATE invoice SET status = 'cancelled', synced = 0 WHERE id = ?`,
+        [invoiceId],
+      );
+
+      // 2. Write one reversal ledger row per item to restore remaining stock
+      for (const item of items) {
+        const reversalLedgerId = uuidv4();
+        await db.runAsync(
+          `INSERT INTO stock_ledger
+             (id, sku_id, entry_date, quantity, entry_type, invoice_id, created_at, device_id, synced)
+           VALUES (?, ?, ?, ?, 'cancel_reversal', ?, ?, ?, 0)`,
+          [
+            reversalLedgerId,
+            item.sku_id,
+            todayStr,
+            item.boxes,
+            invoiceId,
+            timestamp,
+            deviceId,
+          ],
+        );
+      }
+
+      // 3. Reflect the cancellation immediately in local UI state
+      setMetadata({ ...metadata!, status: "cancelled" });
+
+      Alert.alert(
+        "रद्द हो गया (Cancelled)",
+        "बिल रद्द कर दिया गया है और स्टॉक वापस जोड़ दिया गया है।",
+      );
+    } catch (error) {
+      console.error("Failed to cancel invoice:", error);
+      Alert.alert("एरर", "बिल रद्द करने में समस्या आई।");
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -128,6 +205,8 @@ export default function InvoiceDetailScreen() {
     );
   }
 
+  const isCancelled = metadata.status === "cancelled"; // NEW
+
   return (
     <View style={styles.container}>
       {/* Pinned Top Navigation Header */}
@@ -143,6 +222,16 @@ export default function InvoiceDetailScreen() {
         contentContainerStyle={styles.scrollContainer}
         showsVerticalScrollIndicator={false}
       >
+        {/* NEW: cancelled status banner */}
+        {isCancelled && (
+          <View style={styles.cancelledBanner}>
+            <Feather name="x-circle" size={18} color="#DC2626" />
+            <Text style={styles.cancelledBannerText}>
+              यह बिल रद्द कर दिया गया है
+            </Text>
+          </View>
+        )}
+
         {/* Core Invoice Summary Receipt Frame */}
         <View style={styles.receiptPaperCard}>
           <Text style={styles.invoiceMetaLabel}>दुकान विवरण</Text>
@@ -251,14 +340,38 @@ export default function InvoiceDetailScreen() {
 
       {/* Raised Fixed Bottom Action Trigger Strip */}
       <View style={styles.fixedFooterContainer}>
+        {/* NEW: cancel button, hidden once already cancelled */}
+        {!isCancelled && (
+          <TouchableOpacity
+            style={[styles.cancelBtn, cancelling && styles.btnDisabledState]}
+            activeOpacity={0.9}
+            onPress={handleCancelInvoice}
+            disabled={cancelling || reprinting}
+          >
+            {cancelling ? (
+              <ActivityIndicator color="#DC2626" />
+            ) : (
+              <>
+                <Feather
+                  name="x-circle"
+                  size={20}
+                  color="#DC2626"
+                  style={{ marginRight: 8 }}
+                />
+                <Text style={styles.cancelBtnText}>बिल रद्द करें (Cancel)</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
+
         <TouchableOpacity
           style={[
             styles.actionSubmitBtn,
-            reprinting && styles.btnDisabledState,
+            (reprinting || cancelling) && styles.btnDisabledState,
           ]}
           activeOpacity={0.9}
           onPress={handlePrintCommand}
-          disabled={reprinting}
+          disabled={reprinting || cancelling}
         >
           {reprinting ? (
             <ActivityIndicator color="#FFFFFF" />
@@ -322,7 +435,23 @@ const styles = StyleSheet.create({
   scrollContainer: {
     paddingHorizontal: 16,
     paddingTop: 16,
-    paddingBottom: 150, // Runway offset parameter prevents element hiding beneath sticky actions strip
+    paddingBottom: 220, // CHANGED: extra room for the added cancel button row
+  },
+  // NEW: cancelled status banner styles
+  cancelledBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FEE2E2",
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 16,
+    gap: 8,
+  },
+  cancelledBannerText: {
+    color: "#DC2626",
+    fontWeight: "800",
+    fontSize: 14,
   },
   receiptPaperCard: {
     backgroundColor: "#FFFFFF",
@@ -459,6 +588,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 38, // Clean raised layout clearance avoids structural hardware buttons conflicts
     elevation: 16,
+    gap: 10, // NEW: spacing between cancel + reprint buttons
+  },
+  // NEW: cancel button styles (outlined red, sits above the reprint button)
+  cancelBtn: {
+    backgroundColor: "#FFFFFF",
+    height: 52,
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+    flexDirection: "row",
+    borderWidth: 1.5,
+    borderColor: "#DC2626",
+  },
+  cancelBtnText: {
+    color: "#DC2626",
+    fontSize: 16,
+    fontWeight: "800",
   },
   actionSubmitBtn: {
     backgroundColor: "#111827",

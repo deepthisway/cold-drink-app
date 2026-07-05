@@ -35,13 +35,13 @@ export default function NewShopScreen() {
       const timestamp = new Date().toISOString();
 
       await db.runAsync(
-        `INSERT INTO shop (id, name, phone, address, active, created_at, synced) 
-         VALUES (?, ?, ?, null, 1, ?, 0)`,
+        `INSERT INTO shop (id, name, phone, created_at) 
+          VALUES (?, ?, ?, ?)`,
         [newShopId, shopName.trim(), phone.trim() || null, timestamp],
       );
 
       Alert.alert("सफलता (Success)", "नई दुकान सफलतापूर्वक जोड़ दी गई है!", [
-        { text: "ठीक है (OK)", onPress: () => router.back() },
+        { text: "OK", onPress: () => router.back() },
       ]);
     } catch (error) {
       console.error("Failed to insert new shop layout row:", error);

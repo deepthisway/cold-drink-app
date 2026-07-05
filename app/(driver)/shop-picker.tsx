@@ -1,6 +1,7 @@
+import { getDB } from "@/src/db/local/sqlite";
 import { Feather } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useState } from "react";
 import {
   Alert,
   FlatList,
@@ -11,7 +12,6 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { getDB } from "../../src/db/local/sqlite";
 import { useAppStore } from "../../src/store/appStore";
 
 interface ShopItem {
@@ -29,21 +29,23 @@ export default function ShopPickerScreen() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isListening, setIsListening] = useState(false);
 
-  useEffect(() => {
-    async function loadShops() {
-      try {
-        const db = await getDB();
-        const rows = await db.getAllAsync<ShopItem>(
-          "SELECT id, name, phone FROM shop ORDER BY name ASC",
-        );
-        setShops(rows);
-        setFilteredShops(rows);
-      } catch (error) {
-        console.error("Failed to load shops register:", error);
+  useFocusEffect(
+    useCallback(() => {
+      async function loadShops() {
+        try {
+          const db = await getDB();
+          const rows = await db.getAllAsync<ShopItem>(
+            "SELECT id, name, phone FROM shop ORDER BY name ASC",
+          );
+          setShops(rows);
+          setFilteredShops(rows);
+        } catch (error) {
+          console.error("Failed to load shops register:", error);
+        }
       }
-    }
-    loadShops();
-  }, []);
+      loadShops();
+    }, []),
+  );
 
   const handleSearch = (text: string) => {
     setSearchQuery(text);

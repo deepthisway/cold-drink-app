@@ -11,7 +11,8 @@ export interface PrintItem {
 
 export interface PrintInvoiceData {
   shopName: string;
-  date: string;
+  date: string; // "YYYY-MM-DD"
+  billNo?: number | string;
   totalBoxes: number;
   totalAmount: number;
   cashPaid: number;
@@ -21,7 +22,7 @@ export interface PrintInvoiceData {
 }
 
 export interface EndDayInvoiceRow {
-  displayLabel: string; // shop name (ya "Cancelled" wala tag)
+  displayLabel: string;
   boxes: number;
   amount: number;
   cancelled: boolean;
@@ -38,7 +39,7 @@ export interface EndDayPaymentRow {
 }
 
 export interface EndDayReportData {
-  date: string;
+  date: string; // "YYYY-MM-DD"
   invoices: EndDayInvoiceRow[];
   totalAmount: number;
   totalBoxes: number;
@@ -50,8 +51,81 @@ export interface EndDayReportData {
   totalCash: number;
 }
 
+// ---- Layout constants ----
+// 58mm thermal printers using the default font print ~32 characters per line.
+// Every line below is built to exactly this width so the printer NEVER has
+// to wrap text itself — the library's own word-wrap was the root cause of
+// the broken/garbled receipts.
+const LINE_WIDTH = 32;
+
 function toBtAddress(macAddress: string): string {
   return macAddress.startsWith("bt:") ? macAddress : `bt:${macAddress}`;
+}
+
+function formatDateDDMMYYYY(isoDate: string): string {
+  const [y, m, d] = isoDate.split("-");
+  if (!y || !m || !d) return isoDate;
+  return `${d}-${m}-${y}`;
+}
+
+function formatTimeHHmm(date: Date): string {
+  const hh = date.getHours().toString().padStart(2, "0");
+  const mm = date.getMinutes().toString().padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+// Truncates (never wraps) a string to fit, then pads it to an exact width.
+function fit(text: string, width: number): string {
+  const safe = text ?? "";
+  if (safe.length > width) {
+    return safe.slice(0, Math.max(width - 1, 1)) + ".";
+  }
+  return safe.padEnd(width, " ");
+}
+
+function fitRight(text: string, width: number): string {
+  const safe = (text ?? "").toString();
+  if (safe.length > width) {
+    return safe.slice(0, width);
+  }
+  return safe.padStart(width, " ");
+}
+
+// One line, left label + right value, guaranteed to be exactly LINE_WIDTH
+// (or fewer) characters — never wraps.
+function row(left: string, right: string, width = LINE_WIDTH): string {
+  const rightStr = right ?? "";
+  const rightWidth = Math.min(rightStr.length, width - 1);
+  const rightPart = fitRight(rightStr, rightWidth || rightStr.length);
+  const leftWidth = width - rightPart.length;
+  const leftPart = fit(left ?? "", Math.max(leftWidth, 1));
+  return `${leftPart}${rightPart}`;
+}
+
+function dashLine(width = LINE_WIDTH) {
+  return { type: "text" as const, content: "-".repeat(width) };
+}
+
+function textLine(content: string, style?: Record<string, any>) {
+  return { type: "text" as const, content, style };
+}
+
+// Item row: name | box | amount, all fixed width, fits on one line.
+function itemRow(
+  name: string,
+  boxes: number | string,
+  amount: number | string,
+) {
+  const nameCol = fit(name, 16);
+  const boxCol = fitRight(`${boxes}`, 6);
+  const amtCol = fitRight(`${amount}`, 10);
+  return textLine(`${nameCol}${boxCol}${amtCol}`);
+}
+
+function itemHeader() {
+  return textLine(
+    `${fit("Item", 16)}${fitRight("Box", 6)}${fitRight("Amt", 10)}`,
+  );
 }
 
 export const printReceipt = async (
@@ -82,68 +156,53 @@ export const printReceipt = async (
       targetAddress = paired[0].address;
     }
 
+    const printTime = new Date();
+    const cash = invoice.cashPaid ?? 0;
+    const paytm = invoice.paytmPaid ?? 0;
+    const udhaar = invoice.udhaar ?? 0;
+
     const documentBody: any[] = [
-      {
-        type: "text",
-        content: "Deep Cold Drinks",
-        style: { align: "center", bold: true, size: "double" },
-      },
-      {
-        type: "text",
-        content: "Wholesale Distributor",
-        style: { align: "center" },
-      },
-      { type: "line" },
-      { type: "text", content: `Shop: ${invoice.shopName}` },
-      { type: "text", content: `Date: ${invoice.date}` },
-      { type: "line" },
-      {
-        type: "table",
-        headers: ["Item", "Qty", "Amount"],
-        rows: invoice.items.map((item) => [
-          item.name.substring(0, 14),
-          `${item.boxes}`,
-          `${item.amount}`,
-        ]),
-        columnWidths: [16, 6, 10],
-        alignments: ["left", "center", "right"],
-      },
-      { type: "line" },
-      {
-        type: "text",
-        content: `Total Boxes: ${invoice.totalBoxes}`,
-        style: { align: "right" },
-      },
-      {
-        type: "text",
-        content: `GRAND TOTAL: Rs ${invoice.totalAmount}`,
-        style: { align: "right", bold: true, size: "double_width" },
-      },
-      { type: "line" },
-      { type: "text", content: `Cash Paid: Rs ${invoice.cashPaid}` },
+      textLine("Deep Cold Drinks", {
+        align: "center",
+        bold: true,
+        size: "double",
+      }),
+      textLine("Wholesale Distributor", { align: "center" }),
+      dashLine(),
+      textLine(`Bill No : ${invoice.billNo ?? "-"}`),
+      textLine(
+        `Date : ${formatDateDDMMYYYY(invoice.date)} ${formatTimeHHmm(printTime)}`,
+      ),
+      textLine(`Shop : ${fit(invoice.shopName ?? "", 24)}`.trimEnd()),
+      dashLine(),
+      itemHeader(),
+      dashLine(),
+      ...invoice.items.map((item) =>
+        itemRow(item.name, item.boxes, item.amount),
+      ),
+      dashLine(),
+      textLine(
+        row(`TOTAL : ${invoice.totalBoxes} box`, `Rs ${invoice.totalAmount}`),
+        {
+          bold: true,
+        },
+      ),
+      dashLine(),
+      textLine(row("Cash", `Rs ${cash}`)),
     ];
 
-    if (invoice.paytmPaid > 0) {
-      documentBody.push({
-        type: "text",
-        content: `Paytm/Online: Rs ${invoice.paytmPaid}`,
-      });
+    if (paytm > 0) {
+      documentBody.push(textLine(row("Paytm", `Rs ${paytm}`)));
     }
-    if (invoice.udhaar > 0) {
-      documentBody.push({
-        type: "text",
-        content: `UDHAAR DUE: Rs ${invoice.udhaar}`,
-        style: { bold: true },
-      });
+    if (udhaar > 0) {
+      documentBody.push(
+        textLine(row("Udhaar", `Rs ${udhaar}`), { bold: true }),
+      );
     }
 
     documentBody.push(
-      { type: "line" },
-      {
-        type: "text",
-        content: "Thank You! Please Visit Again.",
-        style: { align: "center" },
-      },
+      dashLine(),
+      textLine("Thank you", { align: "center" }),
       { type: "feed", lines: 3 },
       { type: "cut" },
     );
@@ -152,10 +211,7 @@ export const printReceipt = async (
       printers: [
         {
           address: toBtAddress(targetAddress),
-          options: {
-            paperWidthMm: 58,
-            marginMm: 1,
-          },
+          options: { paperWidthMm: 58, marginMm: 1 },
         },
       ],
       documents: [documentBody],
@@ -173,18 +229,17 @@ export const printReceipt = async (
 };
 
 /**
- * Single, consolidated end-of-day report.
- * Prints ONE receipt with exactly:
+ * Single, consolidated end-of-day report — exactly one print job containing:
  *  - total boxes sold
  *  - total bill amount
  *  - total paytm
  *  - total udhaar
- *  - total cash in hand (derived: totalAmount - totalUdhaar - totalPaytm)
- *  - clean list of who owes udhaar, and how much
- *  - clean list of who paid online (paytm), and how much
+ *  - total cash in hand
+ *  - udhaar list (shop + amount)
+ *  - paytm list (shop + amount)
  *
- * Caller is responsible for marking invoices "settled" only after this
- * returns true, and for blocking a second call for the same date.
+ * Every line is fixed-width text (see LINE_WIDTH) — no "table" type, so
+ * nothing can wrap mid-word and scramble the columns.
  */
 export const printEndDayReports = async (
   data: EndDayReportData,
@@ -210,86 +265,57 @@ export const printEndDayReports = async (
       targetAddress = paired[0].address;
     }
 
+    // Defensive fallbacks — a caller bug should never surface as "undefined"
+    // on a printed receipt.
+    const totalBoxes = data.totalBoxes ?? 0;
+    const totalAmount = data.totalAmount ?? 0;
+    const totalPaytm = data.totalPaytm ?? 0;
+    const totalUdhaar = data.totalUdhaar ?? 0;
+    const totalCash =
+      data.totalCash ?? Math.max(0, totalAmount - totalUdhaar - totalPaytm);
+
     const summaryDoc: any[] = [
-      {
-        type: "text",
-        content: "DAY END REPORT",
-        style: { align: "center", bold: true, size: "double" },
-      },
-      { type: "text", content: data.date, style: { align: "center" } },
-      { type: "line" },
-      {
-        type: "text",
-        content: `Total Boxes Sold: ${data.totalBoxes}`,
-        style: { bold: true },
-      },
-      {
-        type: "text",
-        content: `Total Bill Amount: Rs ${data.totalAmount}`,
-        style: { bold: true },
-      },
-      { type: "line" },
-      { type: "text", content: `Total Paytm: Rs ${data.totalPaytm}` },
-      { type: "text", content: `Total Udhaar: Rs ${data.totalUdhaar}` },
-      {
-        type: "text",
-        content: `Total Cash In Hand: Rs ${data.totalCash}`,
-        style: { bold: true, size: "double_width" },
-      },
-      { type: "line" },
+      textLine("DAY END REPORT", {
+        align: "center",
+        bold: true,
+        size: "double",
+      }),
+      textLine(formatDateDDMMYYYY(data.date), { align: "center" }),
+      dashLine(),
+      textLine(row("Total Boxes Sold", `${totalBoxes}`), { bold: true }),
+      textLine(row("Total Bill Amt", `Rs ${totalAmount}`), { bold: true }),
+      dashLine(),
+      textLine(row("Total Paytm", `Rs ${totalPaytm}`)),
+      textLine(row("Total Udhaar", `Rs ${totalUdhaar}`)),
+      textLine(row("Cash In Hand", `Rs ${totalCash}`), { bold: true }),
+      dashLine(),
+      textLine("UDHAAR", { bold: true, align: "center" }),
     ];
 
-    // ---- Udhaar list ----
-    summaryDoc.push({
-      type: "text",
-      content: "UDHAAR LIST",
-      style: { bold: true, align: "center" },
-    });
-    if (data.udhaarList.length === 0) {
-      summaryDoc.push({
-        type: "text",
-        content: "-- No Udhaar Today --",
-        style: { align: "center" },
-      });
+    if (!data.udhaarList || data.udhaarList.length === 0) {
+      summaryDoc.push(textLine("-- No Udhaar Today --", { align: "center" }));
     } else {
-      summaryDoc.push({
-        type: "table",
-        headers: ["Shop", "Amount"],
-        rows: data.udhaarList.map((u) => [u.shopName, `${u.amount}`]),
-        columnWidths: [24, 12],
-        alignments: ["left", "right"],
-      });
-    }
-
-    summaryDoc.push({ type: "line" });
-
-    // ---- Paytm list ----
-    summaryDoc.push({
-      type: "text",
-      content: "PAYTM LIST",
-      style: { bold: true, align: "center" },
-    });
-    if (data.paytmList.length === 0) {
-      summaryDoc.push({
-        type: "text",
-        content: "-- No Online Payment Today --",
-        style: { align: "center" },
-      });
-    } else {
-      summaryDoc.push({
-        type: "table",
-        headers: ["Shop", "Amount"],
-        rows: data.paytmList.map((p) => [p.shopName, `${p.amount}`]),
-        columnWidths: [24, 12],
-        alignments: ["left", "right"],
-      });
+      for (const u of data.udhaarList) {
+        summaryDoc.push(textLine(row(fit(u.shopName, 20), `${u.amount}`, 32)));
+      }
     }
 
     summaryDoc.push(
-      { type: "line" },
-      { type: "feed", lines: 3 },
-      { type: "cut" },
+      dashLine(),
+      textLine("PAYTM", { bold: true, align: "center" }),
     );
+
+    if (!data.paytmList || data.paytmList.length === 0) {
+      summaryDoc.push(
+        textLine("-- No Online Payment Today --", { align: "center" }),
+      );
+    } else {
+      for (const p of data.paytmList) {
+        summaryDoc.push(textLine(row(fit(p.shopName, 20), `${p.amount}`, 32)));
+      }
+    }
+
+    summaryDoc.push(dashLine(), { type: "feed", lines: 3 }, { type: "cut" });
 
     const job = {
       printers: [
@@ -298,7 +324,7 @@ export const printEndDayReports = async (
           options: { paperWidthMm: 58, marginMm: 1 },
         },
       ],
-      documents: [summaryDoc], // ek hi report print hogi
+      documents: [summaryDoc],
     };
 
     const result = await ThermalPrinter.printReceipt(job);
@@ -338,26 +364,20 @@ export const printItemWiseReport = async (
     }
 
     const itemDoc: any[] = [
-      {
-        type: "text",
-        content: "DAILY ITEM REPORT",
-        style: { align: "center", bold: true, size: "double" },
-      },
-      { type: "text", content: data.date, style: { align: "center" } },
-      { type: "line" },
-      {
-        type: "table",
-        headers: ["Item", "Box"],
-        rows: data.skuTotals.map((s) => [s.name, `${s.boxes}`]),
-        columnWidths: [26, 10],
-        alignments: ["left", "right"],
-      },
-      { type: "line" },
-      {
-        type: "text",
-        content: `TOTAL BOXES: ${data.totalBoxes}`,
-        style: { bold: true },
-      },
+      textLine("DAILY ITEM REPORT", {
+        align: "center",
+        bold: true,
+        size: "double",
+      }),
+      textLine(formatDateDDMMYYYY(data.date), { align: "center" }),
+      dashLine(),
+      textLine(`${fit("Item", 22)}${fitRight("Box", 10)}`),
+      dashLine(),
+      ...data.skuTotals.map((s) =>
+        textLine(`${fit(s.name, 22)}${fitRight(`${s.boxes}`, 10)}`),
+      ),
+      dashLine(),
+      textLine(row("TOTAL BOX", `${data.totalBoxes ?? 0}`), { bold: true }),
       { type: "feed", lines: 3 },
       { type: "cut" },
     ];
