@@ -1,16 +1,16 @@
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
-    Alert,
-    SafeAreaView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Alert,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useAppStore } from "../../src/store/appStore";
 
-const CORRECT_PIN = "1234";
+const CORRECT_PIN = "9393";
 
 export default function PinEntryScreen() {
   const router = useRouter();

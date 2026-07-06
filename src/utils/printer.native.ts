@@ -162,7 +162,7 @@ export const printReceipt = async (
     const udhaar = invoice.udhaar ?? 0;
 
     const documentBody: any[] = [
-      textLine("Deep Cold Drinks", {
+      textLine("Cold Drinks Sale", {
         align: "center",
         bold: true,
         size: "double",
@@ -371,10 +371,13 @@ export const printItemWiseReport = async (
       }),
       textLine(formatDateDDMMYYYY(data.date), { align: "center" }),
       dashLine(),
-      textLine(`${fit("Item", 22)}${fitRight("Box", 10)}`),
+      // FIXED: was fit("Item", 22) + fitRight("Box", 10) = 32 chars,
+      // overflowing the printer's real 24-char line width. Shrunk to
+      // 14 + 10 = 24 to match LINE_WIDTH.
+      textLine(`${fit("Item", 14)}${fitRight("Box", 10)}`),
       dashLine(),
       ...data.skuTotals.map((s) =>
-        textLine(`${fit(s.name, 22)}${fitRight(`${s.boxes}`, 10)}`),
+        textLine(`${fit(s.name, 14)}${fitRight(`${s.boxes}`, 10)}`),
       ),
       dashLine(),
       textLine(row("TOTAL BOX", `${data.totalBoxes ?? 0}`), { bold: true }),

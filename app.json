@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "cold-drink-app",
+    "name": "Gagan Drinks",
     "slug": "cold-drink-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -12,13 +12,11 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#0B3D91"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.yourname.colddrinkapp",
+      "package": "com.gagan.colddrinkapp",
       "permissions": [
         "android.permission.BLUETOOTH",
         "android.permission.BLUETOOTH_ADMIN",
@@ -38,7 +36,7 @@
         {
           "image": "./assets/images/splash-icon.png",
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "backgroundColor": "#0B3D91"
         }
       ],
       "expo-sqlite"
