@@ -44,13 +44,19 @@ export async function syncDatabaseWithCloud(): Promise<void> {
 
     if (cloudSkus) {
       for (const item of cloudSkus) {
+        // Look for this specific block in your code and update it:
         await db.runAsync(
           `INSERT INTO sku (id, name, brand, size, price, image_path, active, created_at, synced)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-           ON CONFLICT(id) DO UPDATE SET
-             name=excluded.name, brand=excluded.brand, size=excluded.size,
-             price=excluded.price, active=excluded.active, synced=1
-           WHERE synced = 1`, // Don't clobber a local unsynced edit that hasn't uploaded yet
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+   ON CONFLICT(id) DO UPDATE SET
+     name=excluded.name, 
+     brand=excluded.brand, 
+     size=excluded.size,
+     price=excluded.price, 
+     image_path=excluded.image_path,
+     active=excluded.active, 
+     synced=1
+   WHERE synced = 1`,
           [
             item.id,
             item.name,

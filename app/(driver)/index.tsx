@@ -201,7 +201,7 @@ export default function DriverHomeScreen() {
           onLongPress={() => router.push("/(admin)/pin-entry")}
           style={styles.brandCenter}
         >
-          <Text style={styles.brandTitle}>Deep Drinks</Text>
+          <Text style={styles.brandTitle}>Gagan Drinks</Text>
           <Text style={styles.dateText}>{formattedDate}</Text>
         </TouchableOpacity>
 

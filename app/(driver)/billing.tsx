@@ -24,7 +24,8 @@ interface SKURow {
 }
 
 const { width } = Dimensions.get("window");
-const GRID_TILE_SIZE = (width - 44) / 2; // Math parameters for clean grid look
+const GRID_TILE_SIZE = (width - 44) / 2;
+const GRID_TILE_HEIGHT = GRID_TILE_SIZE * 1.4; // Slightly increased height for optimal layout proportions
 
 export default function BillingScreen() {
   const router = useRouter();
@@ -33,8 +34,6 @@ export default function BillingScreen() {
   const updateCartQuantity = useAppStore((state) => state.updateCartQuantity);
 
   const [skus, setSkus] = useState<SKURow[]>([]);
-
-  // Layout state: 'grid' or 'list'
   const [layoutStyle, setLayoutStyle] = useState<"grid" | "list">("grid");
 
   useEffect(() => {
@@ -70,7 +69,6 @@ export default function BillingScreen() {
     0,
   );
 
-  // Toggle layout function helper
   const toggleLayout = () => {
     setLayoutStyle((prev) => (prev === "grid" ? "list" : "grid"));
   };
@@ -87,7 +85,6 @@ export default function BillingScreen() {
         </View>
 
         <View style={styles.headerActions}>
-          {/* Dynamic View Toggle Button */}
           <TouchableOpacity
             style={styles.actionIconButton}
             activeOpacity={0.7}
@@ -118,7 +115,7 @@ export default function BillingScreen() {
 
       {/* Main Inventory Component List Container */}
       <FlatList
-        key={layoutStyle} // Forces re-render instantly when shifting keys to bypass React Native core grid limitations
+        key={layoutStyle}
         data={skus}
         keyExtractor={(item) => item.id}
         numColumns={layoutStyle === "grid" ? 2 : 1}
@@ -131,88 +128,87 @@ export default function BillingScreen() {
           const isSelected = chosenQty > 0;
 
           // ==========================================
-          // 1. GRID LOOK RENDERING BLOCK
+          // 1. FIXED GRID LAYOUT WITH ABSOLUTE BACKDROP IMAGE
           // ==========================================
           if (layoutStyle === "grid") {
             return (
               <View style={[styles.tile, isSelected && styles.tileGlowing]}>
-                <View
-                  style={[
-                    styles.stockBubble,
-                    item.remaining_stock <= 0 && styles.stockBubbleEmpty,
-                  ]}
-                >
-                  <Text style={styles.stockBubbleText}>
-                    स्टॉक: {item.remaining_stock}
-                  </Text>
-                </View>
-
-                <View style={styles.imageContainerGrid}>
-                  {item.image_path ? (
-                    <Image
-                      source={{ uri: item.image_path }}
-                      style={styles.productImage}
-                      resizeMode="contain"
-                    />
-                  ) : (
-                    <View style={styles.imagePlaceholderGrid}>
-                      <Feather
-                        name="layers"
-                        size={26}
-                        color={isSelected ? "#111827" : "#9CA3AF"}
-                      />
-                    </View>
-                  )}
-                </View>
-
-                <View style={styles.skuMetaGrid}>
-                  <Text style={styles.skuNameGrid} numberOfLines={1}>
-                    {item.name}
-                  </Text>
-                  <Text style={styles.skuSpecsGrid}>
-                    {item.size || "Size"} • ₹{item.price}
-                  </Text>
-                </View>
-
-                <View style={styles.stepperContainerGrid}>
-                  <TouchableOpacity
-                    style={styles.stepperBtnGrid}
-                    activeOpacity={0.6}
-                    onPress={() =>
-                      updateCartQuantity(
-                        item.id,
-                        item.name,
-                        item.price,
-                        -1,
-                        item.remaining_stock,
-                      )
-                    }
+                {/* Stock Badge - Placed absolute on top layer */}
+                <View style={styles.tileTopRow}>
+                  <View
+                    style={[
+                      styles.stockBubble,
+                      item.remaining_stock <= 0 && styles.stockBubbleEmpty,
+                    ]}
                   >
-                    <Feather name="minus" size={14} color="#111827" />
-                  </TouchableOpacity>
-                  <Text style={styles.stepperQtyTextGrid}>{chosenQty}</Text>
-                  <TouchableOpacity
-                    style={styles.stepperBtnGrid}
-                    activeOpacity={0.6}
-                    onPress={() =>
-                      updateCartQuantity(
-                        item.id,
-                        item.name,
-                        item.price,
-                        1,
-                        item.remaining_stock,
-                      )
-                    }
-                  >
-                    <Feather name="plus" size={14} color="#111827" />
-                  </TouchableOpacity>
+                    <Text style={styles.stockBubbleText}>
+                      स्टॉक: {item.remaining_stock}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Big Drink Image pushed into top zone */}
+                {item.image_path ? (
+                  <Image
+                    source={{ uri: item.image_path }}
+                    style={styles.backgroundImageGrid}
+                    resizeMode="contain"
+                  />
+                ) : (
+                  <View style={styles.fallbackGridWrapper}>
+                    <Feather name="layers" size={32} color="#9CA3AF" />
+                  </View>
+                )}
+
+                {/* Clear White Control Console Base */}
+                <View style={styles.tileBottomCluster}>
+                  <View style={styles.skuMetaGrid}>
+                    <Text style={styles.skuNameGrid} numberOfLines={1}>
+                      {item.name}
+                    </Text>
+                    <Text style={styles.skuSpecsGrid}>₹{item.price}</Text>
+                  </View>
+
+                  <View style={styles.stepperContainerGrid}>
+                    <TouchableOpacity
+                      style={styles.stepperBtnGrid}
+                      activeOpacity={0.6}
+                      onPress={() =>
+                        updateCartQuantity(
+                          item.id,
+                          item.name,
+                          item.price,
+                          -1,
+                          item.remaining_stock,
+                        )
+                      }
+                    >
+                      <Feather name="minus" size={14} color="#111827" />
+                    </TouchableOpacity>
+                    <Text style={styles.stepperQtyTextGrid}>{chosenQty}</Text>
+                    <TouchableOpacity
+                      style={styles.stepperBtnGrid}
+                      activeOpacity={0.6}
+                      onPress={() =>
+                        updateCartQuantity(
+                          item.id,
+                          item.name,
+                          item.price,
+                          1,
+                          item.remaining_stock,
+                        )
+                      }
+                    >
+                      <Feather name="plus" size={14} color="#111827" />
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </View>
             );
           }
 
           // ==========================================
-          // 2. LIST VIEW ROW RENDERING BLOCK
+          // 2. LARGE IMAGE LIST ROW VIEW
           // ==========================================
           return (
             <View
@@ -221,20 +217,16 @@ export default function BillingScreen() {
                 isSelected && styles.listRowCardSelected,
               ]}
             >
-              <View style={styles.imageBlockList}>
+              <View style={styles.imageBlockListContainer}>
                 {item.image_path ? (
                   <Image
                     source={{ uri: item.image_path }}
-                    style={styles.productImage}
+                    style={styles.imageBlockList}
                     resizeMode="contain"
                   />
                 ) : (
                   <View style={styles.imagePlaceholderList}>
-                    <Feather
-                      name="layers"
-                      size={24}
-                      color={isSelected ? "#111827" : "#9CA3AF"}
-                    />
+                    <Feather name="layers" size={24} color="#9CA3AF" />
                   </View>
                 )}
               </View>
@@ -243,9 +235,7 @@ export default function BillingScreen() {
                 <Text style={styles.skuNameTextList} numberOfLines={1}>
                   {item.name}
                 </Text>
-                <Text style={styles.skuSpecsTextList}>
-                  {item.size || "Size"} • ₹{item.price}
-                </Text>
+                <Text style={styles.skuSpecsTextList}>₹{item.price}</Text>
                 <View
                   style={[
                     styles.stockTagList,
@@ -314,7 +304,7 @@ export default function BillingScreen() {
           activeOpacity={0.9}
           onPress={() => router.push("/(driver)/cart-payment")}
         >
-          <Text style={styles.checkoutBtnText}>आगे बढ़ें</Text>
+          <Text style={styles.checkoutBtnText}>आगे बढ़ें</Text>
           <Feather
             name="arrow-right"
             size={18}
@@ -391,11 +381,11 @@ const styles = StyleSheet.create({
   },
   listContainer: {
     padding: 14,
-    paddingBottom: 170, // Room to fully clear the footer bounds
+    paddingBottom: 170,
   },
 
   // ==========================================
-  // GRID LAYOUT STYLES
+  // GRID STYLES
   // ==========================================
   gridRow: {
     justifyContent: "space-between",
@@ -404,101 +394,107 @@ const styles = StyleSheet.create({
   tile: {
     backgroundColor: "#FFFFFF",
     width: GRID_TILE_SIZE,
-    height: GRID_TILE_SIZE + 65,
-    borderRadius: 22,
-    padding: 12,
-    alignItems: "center",
-    justifyContent: "space-between",
+    height: GRID_TILE_HEIGHT,
+    borderRadius: 24,
     borderWidth: 1,
     borderColor: "#E5E7EB",
+    overflow: "hidden",
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
     position: "relative",
-    elevation: 1,
   },
   tileGlowing: {
     borderColor: "#111827",
-    borderWidth: 2,
-    backgroundColor: "#F8FAFC",
+    borderWidth: 2.5,
+  },
+  backgroundImageGrid: {
+    position: "absolute",
+    top: 35, // Pushes top away from the stock bubble zone
+    left: 10,
+    right: 10,
+    bottom: 90, // Keeps structural safety from blocking bottom texts
+  },
+  fallbackGridWrapper: {
+    width: "100%",
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingBottom: 80,
+  },
+  tileTopRow: {
+    position: "absolute",
+    top: 10,
+    left: 10,
+    zIndex: 20,
   },
   stockBubble: {
-    position: "absolute",
-    top: 8,
-    left: 8,
-    backgroundColor: "#111827",
+    backgroundColor: "rgba(17, 24, 39, 0.9)",
     borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 4,
-    zIndex: 10,
   },
   stockBubbleEmpty: {
-    backgroundColor: "#DC2626",
+    backgroundColor: "rgba(220, 38, 38, 0.95)",
   },
   stockBubbleText: {
     color: "#FFFFFF",
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "800",
   },
-  imageContainerGrid: {
-    width: "100%",
-    height: 85,
-    marginTop: 26,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  productImage: {
-    width: "100%",
-    height: "100%",
-  },
-  imagePlaceholderGrid: {
-    width: "100%",
-    height: "100%",
-    backgroundColor: "#F9FAFB",
-    borderRadius: 14,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1,
+  tileBottomCluster: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "#FFFFFF",
+    padding: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
     borderColor: "#F1F5F9",
+    alignItems: "center",
   },
   skuMetaGrid: {
     alignItems: "center",
     width: "100%",
-    marginTop: 6,
+    marginBottom: 6,
   },
   skuNameGrid: {
-    fontSize: 18,
-    fontWeight: "800",
+    fontSize: 16,
+    fontWeight: "900",
     color: "#111827",
     textAlign: "center",
   },
   skuSpecsGrid: {
-    fontSize: 14,
-    color: "#4B5563",
-    fontWeight: "700",
-    marginTop: 2,
+    fontSize: 15,
+    color: "#1F2937",
+    fontWeight: "800",
+    marginTop: 1,
   },
   stepperContainerGrid: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#F3F4F6",
+    backgroundColor: "#FFFFFF",
     borderRadius: 14,
     width: "100%",
     justifyContent: "space-between",
-    padding: 4,
-    marginTop: 6,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
+    padding: 3,
+    borderWidth: 1.5,
+    borderColor: "#111827",
   },
   stepperBtnGrid: {
-    backgroundColor: "#FFFFFF",
-    width: 36,
-    height: 36,
+    backgroundColor: "#F3F4F6",
+    width: 34,
+    height: 34,
     borderRadius: 10,
     justifyContent: "center",
     alignItems: "center",
-    elevation: 1,
   },
   stepperQtyTextGrid: {
     fontSize: 18,
-    fontWeight: "800",
+    fontWeight: "900",
     color: "#111827",
     minWidth: 24,
     textAlign: "center",
@@ -509,49 +505,53 @@ const styles = StyleSheet.create({
   // ==========================================
   listRowCard: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 20,
-    padding: 14,
+    borderRadius: 22,
+    padding: 12,
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 12,
     borderWidth: 1,
     borderColor: "#E5E7EB",
-    elevation: 1,
+    elevation: 2,
   },
   listRowCardSelected: {
     borderColor: "#111827",
-    borderWidth: 2,
-    backgroundColor: "#F8FAFC",
+    borderWidth: 2.5,
   },
-  imageBlockList: {
-    width: 70,
-    height: 70,
-    borderRadius: 12,
-    overflow: "hidden",
+  imageBlockListcontainer: {
+    width: 85,
+    height: 95,
+    borderRadius: 14,
+    backgroundColor: "#F9FAFB",
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#F9FAFB",
+    overflow: "hidden",
   },
-  imagePlaceholderList: {
+  imageBlockList: {
     width: "100%",
     height: "100%",
+  },
+  imagePlaceholderList: {
+    width: 85,
+    height: 95,
+    borderRadius: 14,
+    backgroundColor: "#F9FAFB",
     justifyContent: "center",
     alignItems: "center",
   },
   detailsBlockList: {
     flex: 1,
     paddingHorizontal: 14,
-    justifyContent: "center",
   },
   skuNameTextList: {
-    fontSize: 18,
-    fontWeight: "800",
+    fontSize: 19,
+    fontWeight: "900",
     color: "#111827",
   },
   skuSpecsTextList: {
-    fontSize: 14,
+    fontSize: 15,
     color: "#4B5563",
-    fontWeight: "700",
+    fontWeight: "800",
     marginTop: 2,
   },
   stockTagList: {
@@ -559,7 +559,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#111827",
     borderRadius: 6,
     paddingHorizontal: 8,
-    paddingVertical: 2,
+    paddingVertical: 3,
     marginTop: 6,
   },
   stockTagEmptyList: {
@@ -567,31 +567,30 @@ const styles = StyleSheet.create({
   },
   stockTagTextList: {
     color: "#FFFFFF",
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "800",
   },
   controlsBlockList: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#F3F4F6",
+    backgroundColor: "#FFFFFF",
     borderRadius: 14,
-    padding: 4,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    gap: 8,
+    padding: 3,
+    borderWidth: 1.5,
+    borderColor: "#111827",
+    gap: 6,
   },
   stepperActionBtnList: {
-    backgroundColor: "#FFFFFF",
-    width: 38,
-    height: 38,
+    backgroundColor: "#F3F4F6",
+    width: 36,
+    height: 36,
     borderRadius: 10,
     justifyContent: "center",
     alignItems: "center",
-    elevation: 1,
   },
   qtyDisplayValueList: {
     fontSize: 18,
-    fontWeight: "800",
+    fontWeight: "900",
     color: "#111827",
     minWidth: 24,
     textAlign: "center",
@@ -608,7 +607,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     paddingTop: 16,
     paddingHorizontal: 20,
-    paddingBottom: 38, // Lifted layout safely above hardware system navigation overlays
+    paddingBottom: 38,
     borderTopWidth: 1,
     borderColor: "#E5E7EB",
     flexDirection: "row",
